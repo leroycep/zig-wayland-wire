@@ -1,6 +1,7 @@
 const std = @import("std");
 const testing = std.testing;
 pub const core = @import("./core.zig");
+pub const xdg = @import("./xdg.zig");
 
 pub fn getDisplayPath(gpa: std.mem.Allocator) ![]u8 {
     const xdg_runtime_dir_path = try std.process.getEnvVarOwned(gpa, "XDG_RUNTIME_DIR");
@@ -54,22 +55,55 @@ test "header from []u32" {
     );
 }
 
+pub fn readUInt(buffer: []const u32, parent_pos: *usize) !u32 {
+    var pos = parent_pos.*;
+    if (pos >= buffer.len) return error.EndOfStream;
+
+    const uint: u32 = @bitCast(buffer[pos]);
+    pos += 1;
+
+    parent_pos.* = pos;
+    return uint;
+}
+
+pub fn readInt(buffer: []const u32, parent_pos: *usize) !i32 {
+    var pos = parent_pos.*;
+    if (pos >= buffer.len) return error.EndOfStream;
+
+    const int: i32 = @bitCast(buffer[pos]);
+    pos += 1;
+
+    parent_pos.* = pos;
+    return int;
+}
+
+pub fn readString(buffer: []const u32, parent_pos: *usize) ![:0]const u8 {
+    var pos = parent_pos.*;
+
+    const len = try readUInt(buffer, &pos);
+    const wordlen = std.mem.alignForward(usize, len, @sizeOf(u32)) / @sizeOf(u32);
+
+    if (pos + wordlen > buffer.len) return error.EndOfStream;
+    const string = std.mem.sliceAsBytes(buffer[pos..])[0 .. len - 1 :0];
+    pos += std.mem.alignForward(usize, len, @sizeOf(u32)) / @sizeOf(u32);
+
+    parent_pos.* = pos;
+    return string;
+}
+
 pub fn deserializeArguments(comptime Signature: type, buffer: []const u32) !Signature {
+    if (Signature == void) return {};
     var result: Signature = undefined;
     var pos: usize = 0;
     inline for (std.meta.fields(Signature)) |field| {
         switch (@typeInfo(field.type)) {
-            .Int => {
-                @field(result, field.name) = @bitCast(buffer[pos]);
-                pos += 1;
+            .Int => |int_info| switch (int_info.signedness) {
+                .signed => @field(result, field.name) = try readInt(buffer, &pos),
+                .unsigned => @field(result, field.name) = try readUInt(buffer, &pos),
             },
             .Pointer => |ptr| switch (ptr.size) {
                 .Slice => {
-                    const len = buffer[pos];
-                    pos += 1;
-                    const byte_pos = pos * @sizeOf(u32);
-                    @field(result, field.name) = std.mem.sliceAsBytes(buffer)[byte_pos..][0 .. len - 1 :0];
-                    pos += std.mem.alignForward(usize, len, @sizeOf(u32)) / @sizeOf(u32);
+                    @field(result, field.name) = try readString(buffer, &pos);
                 },
                 else => @compileError("Unsupported type " ++ @typeName(field.type)),
             },
@@ -114,12 +148,13 @@ pub fn calculateSerializedWordLen(comptime Signature: type, message: Signature) 
 
 /// Message must live until the iovec array is written.
 pub fn serializeArguments(comptime Signature: type, buffer: []u32, message: Signature) ![]u32 {
+    if (Signature == void) return buffer[0..0];
     var pos: usize = 0;
     inline for (std.meta.fields(Signature)) |field| {
         switch (@typeInfo(field.type)) {
             .Int => {
                 if (pos >= buffer.len) return error.OutOfMemory;
-                buffer[pos] = @field(message, field.name);
+                buffer[pos] = @bitCast(@field(message, field.name));
                 pos += 1;
             },
             .Pointer => |ptr| switch (ptr.size) {
