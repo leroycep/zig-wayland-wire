@@ -112,8 +112,7 @@ pub const ShmPool = struct {
             width: i32,
             height: i32,
             stride: i32,
-            // Shm.Format
-            format: u32,
+            format: Shm.Format,
         },
         destroy: void,
         resize: struct {

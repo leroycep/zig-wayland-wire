@@ -176,6 +176,13 @@ pub fn serializeArguments(comptime Signature: type, buffer: []u32, message: Sign
                 buffer[pos] = @bitCast(@field(message, field.name));
                 pos += 1;
             },
+            .Enum => |enum_info| if (enum_info.tag_type == u32) {
+                if (pos >= buffer.len) return error.OutOfMemory;
+                buffer[pos] = @intFromEnum(@field(message, field.name));
+                pos += 1;
+            } else {
+                @compileError("Unsupported type " ++ @typeName(field.type));
+            },
             .Pointer => |ptr| switch (ptr.size) {
                 .Slice => {
                     const str = @field(message, field.name);

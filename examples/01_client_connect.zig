@@ -287,7 +287,7 @@ pub fn main() !void {
                 .width = framebuffer_size[0],
                 .height = framebuffer_size[1],
                 .stride = framebuffer_size[0] * @sizeOf([4]u8),
-                .format = @intFromEnum(wayland.core.Shm.Format.argb8888),
+                .format = .argb8888,
             } },
         );
         try socket.writeAll(std.mem.sliceAsBytes(message));
