@@ -218,13 +218,16 @@ pub fn main() !void {
     const framebuffer = @as([*][4]u8, @ptrCast(framebuffer_bytes.ptr))[0 .. framebuffer_bytes.len / @sizeOf([4]u8)];
 
     // put some interesting colors into the framebuffer
-    for (framebuffer, 0..) |*pixel, i| {
-        pixel.* = .{
-            @truncate(i),
-            @truncate(i + 64),
-            @truncate(i + 128),
-            0xFF,
-        };
+    for (0..framebuffer_size[1]) |y| {
+        const row = framebuffer[y * framebuffer_size[0] .. (y + 1) * framebuffer_size[0]];
+        for (row, 0..framebuffer_size[0]) |*pixel, x| {
+            pixel.* = .{
+                @truncate(x),
+                @truncate(y),
+                0x00,
+                0xFF,
+            };
+        }
     }
 
     const wl_shm_pool_id = 10;
