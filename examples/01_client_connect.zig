@@ -12,8 +12,11 @@ pub fn main() !void {
     const socket = try std.net.connectUnixSocket(display_path);
     defer socket.close();
 
+    // Create an id pool to allocate ids for us
+    var id_pool = wayland.IdPool{};
+
     // reserve an object id for the registry
-    const registry_id = 2;
+    const registry_id = id_pool.create();
     {
         var buffer: [5]u32 = undefined;
         const message = try wayland.serialize(wayland.core.Display.Request, &buffer, 1, .{ .get_registry = .{ .registry = registry_id } });
@@ -21,16 +24,16 @@ pub fn main() !void {
     }
 
     // create a sync callback so we know when the registry is done listing extensions
-    const registry_done_id = 3;
+    const registry_done_id = id_pool.create();
     {
         var buffer: [5]u32 = undefined;
         const message = try wayland.serialize(wayland.core.Display.Request, &buffer, 1, .{ .sync = .{ .callback = registry_done_id } });
         try socket.writeAll(std.mem.sliceAsBytes(message));
     }
 
-    var shm_id: u32 = 4;
-    var compositor_id: u32 = 5;
-    var xdg_wm_base_id: u32 = 6;
+    var shm_id: u32 = id_pool.create();
+    var compositor_id: u32 = id_pool.create();
+    var xdg_wm_base_id: u32 = id_pool.create();
 
     var message_buffer = std.ArrayList(u32).init(gpa);
     defer message_buffer.deinit();
@@ -100,7 +103,7 @@ pub fn main() !void {
         }
     }
 
-    const surface_id = 7;
+    const surface_id = id_pool.create();
     {
         var buffer: [10]u32 = undefined;
         const message = try wayland.serialize(
@@ -114,7 +117,7 @@ pub fn main() !void {
         try socket.writeAll(std.mem.sliceAsBytes(message));
     }
 
-    const xdg_surface_id = 8;
+    const xdg_surface_id = id_pool.create();
     {
         var buffer: [10]u32 = undefined;
         const message = try wayland.serialize(
@@ -129,7 +132,7 @@ pub fn main() !void {
         try socket.writeAll(std.mem.sliceAsBytes(message));
     }
 
-    const xdg_toplevel_id = 9;
+    const xdg_toplevel_id = id_pool.create();
     {
         var buffer: [10]u32 = undefined;
         const message = try wayland.serialize(
@@ -205,7 +208,7 @@ pub fn main() !void {
             const event = try wayland.deserialize(wayland.core.Display.Event, header, message_buffer.items);
             switch (event) {
                 .@"error" => |err| std.debug.print("<- error({}): {} {s}\n", .{ err.object_id, err.code, err.message }),
-                .delete_id => |id| std.debug.print("<- delete_id {}\n", .{id.name}),
+                .delete_id => |id| id_pool.destroy(id.name),
             }
         } else {
             std.debug.print("{} {x} \"{}\"\n", .{ header.object_id, header.size_and_opcode.opcode, std.zig.fmtEscapes(std.mem.sliceAsBytes(message_buffer.items)) });
@@ -379,9 +382,7 @@ pub fn main() !void {
             const event = try wayland.deserialize(wayland.core.Display.Event, header, message_buffer.items);
             switch (event) {
                 .@"error" => |err| std.debug.print("<- error({}): {} {s}\n", .{ err.object_id, err.code, err.message }),
-                .delete_id => {
-                    // TODO: add id to list of free ids
-                },
+                .delete_id => |id| id_pool.destroy(id.name),
             }
         } else {
             std.debug.print("{} {x} \"{}\"\n", .{ header.object_id, header.size_and_opcode.opcode, std.zig.fmtEscapes(std.mem.sliceAsBytes(message_buffer.items)) });

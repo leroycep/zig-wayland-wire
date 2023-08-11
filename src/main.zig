@@ -322,3 +322,21 @@ test "serialize Registry.Event.Global" {
         serialized,
     );
 }
+
+pub const IdPool = struct {
+    next_id: u32 = 2,
+    free_ids: std.BoundedArray(u32, 1024) = .{},
+
+    pub fn create(this: *@This()) u32 {
+        if (this.free_ids.popOrNull()) |id| {
+            return id;
+        }
+
+        defer this.next_id += 1;
+        return this.next_id;
+    }
+
+    pub fn destroy(this: *@This(), id: u32) void {
+        this.free_ids.append(id) catch {};
+    }
+};
