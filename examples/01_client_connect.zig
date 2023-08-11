@@ -196,6 +196,11 @@ pub fn main() !void {
             std.debug.print("<- xdg_toplevel@{} {s} {}\n", .{ header.object_id, @tagName(@as(std.meta.Tag(wayland.xdg.Toplevel.Event), @enumFromInt(header.size_and_opcode.opcode))), std.zig.fmtEscapes(std.mem.sliceAsBytes(message_buffer.items)) });
         } else if (header.object_id == registry_done_id) {
             done = true;
+        } else if (header.object_id == shm_id) {
+            const event = try wayland.deserialize(wayland.core.Shm.Event, header, message_buffer.items);
+            switch (event) {
+                .format => |format| std.debug.print("<- format {} {}\n", .{ format.format, std.zig.fmtEscapes(std.mem.asBytes(&format.format)) }),
+            }
         } else if (header.object_id == 1) {
             const event = try wayland.deserialize(wayland.core.Display.Event, header, message_buffer.items);
             switch (event) {

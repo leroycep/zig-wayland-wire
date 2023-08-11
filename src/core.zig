@@ -144,13 +144,10 @@ pub const Shm = struct {
         };
     };
 
-    pub const Event = union(Event.Tag) {
-        format: Format,
-
-        pub const Tag = enum(u16) {
-            @"error",
-            delete_id,
-        };
+    pub const Event = union(enum) {
+        format: struct {
+            format: Format,
+        },
     };
 
     pub const Format = enum(u32) {

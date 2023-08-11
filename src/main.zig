@@ -113,6 +113,11 @@ pub fn deserializeArguments(comptime Signature: type, buffer: []const u32) !Sign
                 .signed => @field(result, field.name) = try readInt(buffer, &pos),
                 .unsigned => @field(result, field.name) = try readUInt(buffer, &pos),
             },
+            .Enum => |enum_info| if (@sizeOf(enum_info.tag_type) == @sizeOf(u32)) {
+                @field(result, field.name) = @enumFromInt(try readInt(buffer, &pos));
+            } else {
+                @compileError("Unsupported type " ++ @typeName(field.type));
+            },
             .Pointer => |ptr| switch (ptr.size) {
                 .Slice => if (ptr.child == u8) {
                     @field(result, field.name) = try readString(buffer, &pos);
