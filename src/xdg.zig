@@ -110,7 +110,7 @@ pub const Toplevel = struct {
         configure: struct {
             width: i32,
             height: i32,
-            states: []Toplevel.State,
+            states: []const Toplevel.State,
         },
         close: void,
         configure_bounds: struct {
@@ -118,7 +118,7 @@ pub const Toplevel = struct {
             height: i32,
         },
         wm_capabilities: struct {
-            capabilities: []Toplevel.WmCapabilities,
+            capabilities: []const Toplevel.WmCapabilities,
         },
     };
 

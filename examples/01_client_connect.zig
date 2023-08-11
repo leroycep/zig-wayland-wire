@@ -370,16 +370,13 @@ pub fn main() !void {
                 },
             }
         } else if (header.object_id == xdg_toplevel_id) {
-            // const event = try wayland.deserialize(wayland.xdg.Toplevel.Event, header, message_buffer.items);
-            // std.debug.print("<- {}\n", .{event});
-            switch (@as(std.meta.Tag(wayland.xdg.Toplevel.Event), @enumFromInt(header.size_and_opcode.opcode))) {
-                .configure => {
-                    const width: i32 = @intCast(message_buffer.items[0]);
-                    const height: i32 = @intCast(message_buffer.items[1]);
-                    std.debug.print("<- xdg_toplevel@{} configure <{}, {}>\n", .{ header.object_id, width, height });
+            const event = try wayland.deserialize(wayland.xdg.Toplevel.Event, header, message_buffer.items);
+            switch (event) {
+                .configure => |conf| {
+                    std.debug.print("<- xdg_toplevel@{} configure <{}, {}> {any}\n", .{ header.object_id, conf.width, conf.height, conf.states });
                 },
                 .close => running = false,
-                else => |tag| std.debug.print("<- xdg_toplevel@{} {s} {}\n", .{ header.object_id, @tagName(tag), std.zig.fmtEscapes(std.mem.sliceAsBytes(message_buffer.items)) }),
+                else => |tag| std.debug.print("<- xdg_toplevel@{} {s} {}\n", .{ header.object_id, @tagName(tag), event }),
             }
         } else if (header.object_id == wl_buffer_id) {
             const event = try wayland.deserialize(wayland.core.Buffer.Event, header, message_buffer.items);

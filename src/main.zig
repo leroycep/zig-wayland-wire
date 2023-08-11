@@ -91,6 +91,18 @@ pub fn readString(buffer: []const u32, parent_pos: *usize) ![:0]const u8 {
     return string;
 }
 
+pub fn readArray(comptime T: type, buffer: []const u32, parent_pos: *usize) ![]const T {
+    var pos = parent_pos.*;
+
+    const byte_size = try readUInt(buffer, &pos);
+
+    const array = @as([*]const T, @ptrCast(buffer[pos..].ptr))[0 .. byte_size / @sizeOf(T)];
+    pos += byte_size / @sizeOf(u32);
+
+    parent_pos.* = pos;
+    return array;
+}
+
 pub fn deserializeArguments(comptime Signature: type, buffer: []const u32) !Signature {
     if (Signature == void) return {};
     var result: Signature = undefined;
@@ -102,8 +114,10 @@ pub fn deserializeArguments(comptime Signature: type, buffer: []const u32) !Sign
                 .unsigned => @field(result, field.name) = try readUInt(buffer, &pos),
             },
             .Pointer => |ptr| switch (ptr.size) {
-                .Slice => {
+                .Slice => if (ptr.child == u8) {
                     @field(result, field.name) = try readString(buffer, &pos);
+                } else {
+                    @field(result, field.name) = try readArray(ptr.child, buffer, &pos);
                 },
                 else => @compileError("Unsupported type " ++ @typeName(field.type)),
             },
