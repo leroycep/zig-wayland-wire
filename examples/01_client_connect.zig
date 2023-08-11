@@ -31,7 +31,6 @@ pub fn main() !void {
     var shm_id: u32 = 4;
     var compositor_id: u32 = 5;
     var xdg_wm_base_id: u32 = 6;
-    var wp_single_pixel_buffer_manager_id: u32 = 7;
 
     var message_buffer = std.ArrayList(u32).init(gpa);
     defer message_buffer.deinit();
@@ -90,19 +89,6 @@ pub fn main() !void {
                             } },
                         );
                         try socket.writeAll(std.mem.sliceAsBytes(message));
-                    } else if (std.mem.eql(u8, global.interface, "wp_single_pixel_buffer_manager_v1")) {
-                        const message = try wayland.serialize(
-                            wayland.core.Registry.Request,
-                            &buffer,
-                            registry_id,
-                            .{ .bind = .{
-                                .name = global.name,
-                                .interface = global.interface,
-                                .version = global.version,
-                                .new_id = wp_single_pixel_buffer_manager_id,
-                            } },
-                        );
-                        try socket.writeAll(std.mem.sliceAsBytes(message));
                     }
                 },
                 .global_remove => {},
@@ -114,7 +100,7 @@ pub fn main() !void {
         }
     }
 
-    const surface_id = 8;
+    const surface_id = 7;
     {
         var buffer: [10]u32 = undefined;
         const message = try wayland.serialize(
@@ -128,7 +114,7 @@ pub fn main() !void {
         try socket.writeAll(std.mem.sliceAsBytes(message));
     }
 
-    const xdg_surface_id = 9;
+    const xdg_surface_id = 8;
     {
         var buffer: [10]u32 = undefined;
         const message = try wayland.serialize(
@@ -143,7 +129,7 @@ pub fn main() !void {
         try socket.writeAll(std.mem.sliceAsBytes(message));
     }
 
-    const xdg_toplevel_id = 10;
+    const xdg_toplevel_id = 9;
     {
         var buffer: [10]u32 = undefined;
         const message = try wayland.serialize(
@@ -241,7 +227,7 @@ pub fn main() !void {
         };
     }
 
-    const wl_shm_pool_id = 11;
+    const wl_shm_pool_id = 10;
     {
         var buffer: [10]u32 = undefined;
         const message = try wayland.serialize(
@@ -280,7 +266,7 @@ pub fn main() !void {
         _ = try std.os.sendmsg(socket.handle, &socket_message, 0);
     }
 
-    const wl_buffer_id = 12;
+    const wl_buffer_id = 11;
     {
         var buffer: [10]u32 = undefined;
         const message = try wayland.serialize(
