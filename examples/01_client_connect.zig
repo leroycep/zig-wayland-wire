@@ -201,9 +201,8 @@ pub fn main() !void {
                 },
             }
         } else if (header.object_id == xdg_toplevel_id) {
-            // const event = try wayland.deserialize(wayland.xdg.Toplevel.Event, header, message_buffer.items);
-            // std.debug.print("<- {}\n", .{event});
-            std.debug.print("<- xdg_toplevel@{} {s} {}\n", .{ header.object_id, @tagName(@as(std.meta.Tag(wayland.xdg.Toplevel.Event), @enumFromInt(header.size_and_opcode.opcode))), std.zig.fmtEscapes(std.mem.sliceAsBytes(message_buffer.items)) });
+            const event = try wayland.deserialize(wayland.xdg.Toplevel.Event, header, message_buffer.items);
+            std.debug.print("<- {}\n", .{event});
         } else if (header.object_id == registry_done_id) {
             done = true;
         } else if (header.object_id == shm_id) {
