@@ -31,9 +31,9 @@ pub fn main() !void {
         try socket.writeAll(std.mem.sliceAsBytes(message));
     }
 
-    var shm_id: u32 = id_pool.create();
-    var compositor_id: u32 = id_pool.create();
-    var xdg_wm_base_id: u32 = id_pool.create();
+    var shm_id_opt: ?u32 = null;
+    var compositor_id_opt: ?u32 = null;
+    var xdg_wm_base_id_opt: ?u32 = null;
 
     var message_buffer = std.ArrayList(u32).init(gpa);
     defer message_buffer.deinit();
@@ -54,6 +54,7 @@ pub fn main() !void {
                 .global => |global| {
                     var buffer: [20]u32 = undefined;
                     if (std.mem.eql(u8, global.interface, "wl_shm")) {
+                        shm_id_opt = id_pool.create();
                         const message = try wayland.serialize(
                             wayland.core.Registry.Request,
                             &buffer,
@@ -62,11 +63,12 @@ pub fn main() !void {
                                 .name = global.name,
                                 .interface = global.interface,
                                 .version = global.version,
-                                .new_id = shm_id,
+                                .new_id = shm_id_opt.?,
                             } },
                         );
                         try socket.writeAll(std.mem.sliceAsBytes(message));
-                    } else if (std.mem.eql(u8, global.interface, "wl_compositor")) {
+                    } else if (std.mem.eql(u8, global.interface, wayland.core.Compositor.INTERFACE)) {
+                        compositor_id_opt = id_pool.create();
                         const message = try wayland.serialize(
                             wayland.core.Registry.Request,
                             &buffer,
@@ -75,11 +77,12 @@ pub fn main() !void {
                                 .name = global.name,
                                 .interface = global.interface,
                                 .version = global.version,
-                                .new_id = compositor_id,
+                                .new_id = compositor_id_opt.?,
                             } },
                         );
                         try socket.writeAll(std.mem.sliceAsBytes(message));
                     } else if (std.mem.eql(u8, global.interface, "xdg_wm_base")) {
+                        xdg_wm_base_id_opt = id_pool.create();
                         const message = try wayland.serialize(
                             wayland.core.Registry.Request,
                             &buffer,
@@ -88,7 +91,7 @@ pub fn main() !void {
                                 .name = global.name,
                                 .interface = global.interface,
                                 .version = global.version,
-                                .new_id = xdg_wm_base_id,
+                                .new_id = xdg_wm_base_id_opt.?,
                             } },
                         );
                         try socket.writeAll(std.mem.sliceAsBytes(message));
@@ -102,6 +105,10 @@ pub fn main() !void {
             std.debug.print("{} {x} \"{}\"\n", .{ header.object_id, header.size_and_opcode.opcode, std.zig.fmtEscapes(std.mem.sliceAsBytes(message_buffer.items)) });
         }
     }
+
+    const shm_id = shm_id_opt orelse return error.NeccessaryWaylandExtensionMissing;
+    const compositor_id = compositor_id_opt orelse return error.NeccessaryWaylandExtensionMissing;
+    const xdg_wm_base_id = xdg_wm_base_id_opt orelse return error.NeccessaryWaylandExtensionMissing;
 
     const surface_id = id_pool.create();
     {

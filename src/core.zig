@@ -85,6 +85,8 @@ pub const Registry = struct {
 };
 
 pub const Compositor = struct {
+    pub const INTERFACE = "wl_compositor";
+
     pub const Request = union(Request.Tag) {
         create_surface: CreateSurface,
         create_region: CreateRegion,
