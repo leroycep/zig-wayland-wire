@@ -10,6 +10,9 @@ const XDG_WM_BASE_VERSION = 2;
 /// https://wayland.app/protocols/xdg-shell#xdg_surface:request:ack_configure
 const XDG_SURFACE_REQUEST_ACK_CONFIGURE = 4;
 
+// https://wayland.app/protocols/wayland#wl_registry:event:global
+const WL_REGISTRY_EVENT_GLOBAL = 0;
+
 pub fn main() !void {
     var general_allocator = std.heap.GeneralPurposeAllocator(.{}){};
     defer _ = general_allocator.deinit();
@@ -21,6 +24,7 @@ pub fn main() !void {
     const socket = try std.net.connectUnixSocket(display_path);
     defer socket.close();
 
+    const display_id = 1;
     var next_id: u32 = 2;
 
     // reserve an object id for the registry
@@ -43,7 +47,6 @@ pub fn main() !void {
     }));
 
     // create a sync callback so we know when we are caught up with the server
-    const display_id = 1;
     const registry_done_callback_id = next_id;
     next_id += 1;
 
@@ -68,38 +71,27 @@ pub fn main() !void {
     // How do we know that the opcode for WL_REGISTRY_REQUEST is 0? Because it is the first `request` in the protocol for `wl_registry`.
     const WL_REGISTRY_REQUEST_BIND = 0;
 
-    var message_bytes = std.ArrayList(u8).init(gpa);
-    defer message_bytes.deinit();
+    var message_buffer = std.ArrayList(u8).init(gpa);
+    defer message_buffer.deinit();
     while (true) {
-        message_bytes.shrinkRetainingCapacity(0);
-
-        var header: Header = undefined;
-        const header_bytes_read = try socket.readAll(std.mem.asBytes(&header));
-        if (header_bytes_read < @sizeOf(Header)) {
-            break;
-        }
-
-        try message_bytes.resize(header.size - @sizeOf(Header));
-        const message_bytes_read = try socket.readAll(message_bytes.items);
-        if (message_bytes_read < message_bytes.items.len) {
-            return error.UnexpectedEOF;
-        }
+        const event = try Event.read(socket, &message_buffer);
 
         // Parse event messages based on which object it is for
-        if (header.object_id == registry_done_callback_id) {
-            // No need to parse the message, there is only one event
+        if (event.header.object_id == registry_done_callback_id) {
+            // No need to parse the message body, there is only one possible opcode
             break;
         }
 
-        if (header.object_id == registry_id and header.opcode == 0) {
+        if (event.header.object_id == registry_id and event.header.opcode == WL_REGISTRY_EVENT_GLOBAL) {
             // Parse out the fields of the global event
-            const name: u32 = @bitCast(message_bytes.items[0..4].*);
+            const name: u32 = @bitCast(event.body[0..4].*);
 
-            const interface_str_len: u32 = @bitCast(message_bytes.items[4..8].*);
-            const interface_str: [:0]const u8 = message_bytes.items[8..][0 .. interface_str_len - 1 :0];
+            const interface_str_len: u32 = @bitCast(event.body[4..8].*);
+            // The interface_str is `interface_str_len - 1` because `interface_str_len` includes the null pointer
+            const interface_str: [:0]const u8 = event.body[8..][0 .. interface_str_len - 1 :0];
 
             const interface_str_len_u32_align = std.mem.alignForward(u32, interface_str_len, @alignOf(u32));
-            const version: u32 = @bitCast(message_bytes.items[8 + interface_str_len_u32_align ..][0..4].*);
+            const version: u32 = @bitCast(event.body[8 + interface_str_len_u32_align ..][0..4].*);
 
             // Check to see if the interface is one of the globals we are looking for
             if (std.mem.eql(u8, interface_str, "wl_shm")) {
@@ -110,7 +102,7 @@ pub fn main() !void {
                 shm_id_opt = next_id;
                 next_id += 1;
 
-                const registry_bind_request_message_body = [_]u32{
+                try writeRequest(socket, registry_id, WL_REGISTRY_REQUEST_BIND, &[_]u32{
                     // The numeric name of the global we want to bind.
                     name,
 
@@ -125,16 +117,7 @@ pub fn main() !void {
 
                     //   3. And the `new_id` part, where we tell it which client id we are giving it
                     shm_id_opt.?,
-                };
-
-                const registry_bind_request_header = Header{
-                    .object_id = registry_id,
-                    .opcode = WL_REGISTRY_REQUEST_BIND,
-                    .size = @sizeOf(Header) + registry_bind_request_message_body.len * @sizeOf(u32),
-                };
-
-                try socket.writeAll(std.mem.asBytes(&registry_bind_request_header));
-                try socket.writeAll(std.mem.sliceAsBytes(&registry_bind_request_message_body));
+                });
             } else if (std.mem.eql(u8, interface_str, "wl_compositor")) {
                 if (version < WL_COMPOSITOR_VERSION) {
                     std.log.err("compositor supports only {s} version {}, client expected version >= {}", .{ interface_str, version, WL_COMPOSITOR_VERSION });
@@ -143,7 +126,7 @@ pub fn main() !void {
                 compositor_id_opt = next_id;
                 next_id += 1;
 
-                const registry_bind_request_message_body = [_]u32{
+                try writeRequest(socket, registry_id, WL_REGISTRY_REQUEST_BIND, &[_]u32{
                     name,
                     "wl_compositor".len + 1, // add one for the required null byte
                     @bitCast(@as([4]u8, "wl_c".*)),
@@ -152,16 +135,7 @@ pub fn main() !void {
                     @bitCast(@as([4]u8, "r\x00\x00\x00".*)),
                     WL_COMPOSITOR_VERSION,
                     compositor_id_opt.?,
-                };
-
-                const registry_bind_request_header = Header{
-                    .object_id = registry_id,
-                    .opcode = WL_REGISTRY_REQUEST_BIND,
-                    .size = @sizeOf(Header) + registry_bind_request_message_body.len * @sizeOf(u32),
-                };
-
-                try socket.writeAll(std.mem.asBytes(&registry_bind_request_header));
-                try socket.writeAll(std.mem.sliceAsBytes(&registry_bind_request_message_body));
+                });
             } else if (std.mem.eql(u8, interface_str, "xdg_wm_base")) {
                 if (version < XDG_WM_BASE_VERSION) {
                     std.log.err("compositor supports only {s} version {}, client expected version >= {}", .{ interface_str, version, XDG_WM_BASE_VERSION });
@@ -170,7 +144,7 @@ pub fn main() !void {
                 xdg_wm_base_id_opt = next_id;
                 next_id += 1;
 
-                const registry_bind_request_message_body = [_]u32{
+                try writeRequest(socket, registry_id, WL_REGISTRY_REQUEST_BIND, &[_]u32{
                     name,
                     "xdg_wm_base".len + 1,
                     @bitCast(@as([4]u8, "xdg_".*)),
@@ -178,16 +152,7 @@ pub fn main() !void {
                     @bitCast(@as([4]u8, "ase\x00".*)),
                     XDG_WM_BASE_VERSION,
                     xdg_wm_base_id_opt.?,
-                };
-
-                const registry_bind_request_header = Header{
-                    .object_id = registry_id,
-                    .opcode = WL_REGISTRY_REQUEST_BIND,
-                    .size = @sizeOf(Header) + registry_bind_request_message_body.len * @sizeOf(u32),
-                };
-
-                try socket.writeAll(std.mem.asBytes(&registry_bind_request_header));
-                try socket.writeAll(std.mem.sliceAsBytes(&registry_bind_request_message_body));
+                });
             }
             continue;
         }
@@ -243,30 +208,18 @@ pub fn main() !void {
     var done = false;
     var surface_configured = false;
     while (!done or !surface_configured) {
-        message_bytes.shrinkRetainingCapacity(0);
+        const event = try Event.read(socket, &message_buffer);
 
-        var header: Header = undefined;
-        const header_bytes_read = try socket.readAll(std.mem.asBytes(&header));
-        if (header_bytes_read < @sizeOf(Header)) {
-            break;
-        }
-
-        try message_bytes.resize(header.size - @sizeOf(Header));
-        const message_bytes_read = try socket.readAll(message_bytes.items);
-        if (message_bytes_read < message_bytes.items.len) {
-            return error.UnexpectedEOF;
-        }
-
-        if (header.object_id == create_surface_done_id) {
+        if (event.header.object_id == create_surface_done_id) {
             done = true;
-        } else if (header.object_id == xdg_surface_id) {
-            switch (header.opcode) {
+        } else if (event.header.object_id == xdg_surface_id) {
+            switch (event.header.opcode) {
                 // https://wayland.app/protocols/xdg-shell#xdg_surface:event:configure
                 0 => {
                     // The configure event acts as a heartbeat. Every once in a while the compositor will send us
                     // a `configure` event, and if our application doesn't respond with an `ack_configure` response
                     // it will assume our program has died and destroy the window.
-                    const serial: u32 = @bitCast(message_bytes.items[0..4].*);
+                    const serial: u32 = @bitCast(event.body[0..4].*);
 
                     try writeRequest(socket, xdg_surface_id, XDG_SURFACE_REQUEST_ACK_CONFIGURE, &[_]u32{
                         // We respond with the number it sent us, so it knows which configure we are responding to.
@@ -277,27 +230,27 @@ pub fn main() !void {
                 },
                 else => return error.InvalidOpcode,
             }
-        } else if (header.object_id == display_id) {
-            switch (header.opcode) {
+        } else if (event.header.object_id == display_id) {
+            switch (event.header.opcode) {
                 // https://wayland.app/protocols/wayland#wl_display:event:error
                 0 => {
-                    const object_id: u32 = @bitCast(message_bytes.items[0..4].*);
-                    const error_code: u32 = @bitCast(message_bytes.items[4..8].*);
-                    const error_message_len: u32 = @bitCast(message_bytes.items[8..12].*);
-                    const error_message = message_bytes.items[12 .. error_message_len - 1 :0];
+                    const object_id: u32 = @bitCast(event.body[0..4].*);
+                    const error_code: u32 = @bitCast(event.body[4..8].*);
+                    const error_message_len: u32 = @bitCast(event.body[8..12].*);
+                    const error_message = event.body[12 .. error_message_len - 1 :0];
                     std.log.warn("wl_display:error({}, {}, \"{}\")", .{ object_id, error_code, std.zig.fmtEscapes(error_message) });
                 },
                 // https://wayland.app/protocols/wayland#wl_display:event:delete_id
                 1 => {
                     // wl_display:delete_id tells us that we can reuse an id. In this article we log it, but
                     // otherwise ignore it.
-                    const name: u32 = @bitCast(message_bytes.items[0..4].*);
+                    const name: u32 = @bitCast(event.body[0..4].*);
                     std.log.debug("wl_display:delete_id({})", .{name});
                 },
                 else => return error.InvalidOpcode,
             }
         } else {
-            std.log.warn("unknown event {{ .object_id = {}, .opcode = {x}, .message = \"{}\" }}", .{ header.object_id, header.opcode, std.zig.fmtEscapes(std.mem.sliceAsBytes(message_bytes.items)) });
+            std.log.warn("unknown event {{ .object_id = {}, .opcode = {x}, .message = \"{}\" }}", .{ event.header.object_id, event.header.opcode, std.zig.fmtEscapes(std.mem.sliceAsBytes(event.body)) });
         }
     }
 
@@ -395,28 +348,16 @@ pub fn main() !void {
     // Now we finally, finally, get to the main loop of the program.
     var running = true;
     while (running) {
-        message_bytes.shrinkRetainingCapacity(0);
+        const event = try Event.read(socket, &message_buffer);
 
-        var header: Header = undefined;
-        const header_bytes_read = try socket.readAll(std.mem.asBytes(&header));
-        if (header_bytes_read < @sizeOf(Header)) {
-            break;
-        }
-
-        try message_bytes.resize(header.size - @sizeOf(Header));
-        const message_bytes_read = try socket.readAll(message_bytes.items);
-        if (message_bytes_read < message_bytes.items.len) {
-            return error.UnexpectedEOF;
-        }
-
-        if (header.object_id == xdg_surface_id) {
-            switch (header.opcode) {
+        if (event.header.object_id == xdg_surface_id) {
+            switch (event.header.opcode) {
                 // https://wayland.app/protocols/xdg-shell#xdg_surface:event:configure
                 0 => {
                     // The configure event acts as a heartbeat. Every once in a while the compositor will send us
                     // a `configure` event, and if our application doesn't respond with an `ack_configure` response
                     // it will assume our program has died and destroy the window.
-                    const serial: u32 = @bitCast(message_bytes.items[0..4].*);
+                    const serial: u32 = @bitCast(event.body[0..4].*);
 
                     try writeRequest(socket, xdg_surface_id, XDG_SURFACE_REQUEST_ACK_CONFIGURE, &[_]u32{
                         // We respond with the number it sent us, so it knows which configure we are responding to.
@@ -425,16 +366,16 @@ pub fn main() !void {
                 },
                 else => return error.InvalidOpcode,
             }
-        } else if (header.object_id == xdg_toplevel_id) {
-            switch (header.opcode) {
+        } else if (event.header.object_id == xdg_toplevel_id) {
+            switch (event.header.opcode) {
                 // https://wayland.app/protocols/xdg-shell#xdg_toplevel:event:configure
                 0 => {
                     // The xdg_toplevel:configure event asks us to resize the window. For now, we will ignore it expect to
                     // log it.
-                    const width: u32 = @bitCast(message_bytes.items[0..4].*);
-                    const height: u32 = @bitCast(message_bytes.items[4..8].*);
-                    const states_len: u32 = @bitCast(message_bytes.items[8..12].*);
-                    const states = @as([*]u32, @ptrCast(@alignCast(message_bytes.items[12..].ptr)))[0..states_len];
+                    const width: u32 = @bitCast(event.body[0..4].*);
+                    const height: u32 = @bitCast(event.body[4..8].*);
+                    const states_len: u32 = @bitCast(event.body[8..12].*);
+                    const states = @as([*]const u32, @ptrCast(@alignCast(event.body[12..].ptr)))[0..states_len];
 
                     std.log.debug("xdg_toplevel:configure({}, {}, {any})", .{ width, height, states });
                 },
@@ -450,8 +391,8 @@ pub fn main() !void {
                 3 => std.log.debug("xdg_toplevel:wm_capabilities()", .{}),
                 else => return error.InvalidOpcode,
             }
-        } else if (header.object_id == wl_buffer_id) {
-            switch (header.opcode) {
+        } else if (event.header.object_id == wl_buffer_id) {
+            switch (event.header.opcode) {
                 // https://wayland.app/protocols/wayland#wl_buffer:event:release
                 0 => {
                     // The xdg_toplevel:release event let's us know that it is safe to reuse the buffer now.
@@ -459,27 +400,27 @@ pub fn main() !void {
                 },
                 else => return error.InvalidOpcode,
             }
-        } else if (header.object_id == display_id) {
-            switch (header.opcode) {
+        } else if (event.header.object_id == display_id) {
+            switch (event.header.opcode) {
                 // https://wayland.app/protocols/wayland#wl_display:event:error
                 0 => {
-                    const object_id: u32 = @bitCast(message_bytes.items[0..4].*);
-                    const error_code: u32 = @bitCast(message_bytes.items[4..8].*);
-                    const error_message_len: u32 = @bitCast(message_bytes.items[8..12].*);
-                    const error_message = message_bytes.items[12 .. error_message_len - 1 :0];
+                    const object_id: u32 = @bitCast(event.body[0..4].*);
+                    const error_code: u32 = @bitCast(event.body[4..8].*);
+                    const error_message_len: u32 = @bitCast(event.body[8..12].*);
+                    const error_message = event.body[12 .. error_message_len - 1 :0];
                     std.log.warn("wl_display:error({}, {}, \"{}\")", .{ object_id, error_code, std.zig.fmtEscapes(error_message) });
                 },
                 // https://wayland.app/protocols/wayland#wl_display:event:delete_id
                 1 => {
                     // wl_display:delete_id tells us that we can reuse an id. In this article we log it, but
                     // otherwise ignore it.
-                    const name: u32 = @bitCast(message_bytes.items[0..4].*);
+                    const name: u32 = @bitCast(event.body[0..4].*);
                     std.log.debug("wl_display:delete_id({})", .{name});
                 },
                 else => return error.InvalidOpcode,
             }
         } else {
-            std.log.warn("unknown event {{ .object_id = {}, .opcode = {x}, .message = \"{}\" }}", .{ header.object_id, header.opcode, std.zig.fmtEscapes(std.mem.sliceAsBytes(message_bytes.items)) });
+            std.log.warn("unknown event {{ .object_id = {}, .opcode = {x}, .message = \"{}\" }}", .{ event.header.object_id, event.header.opcode, std.zig.fmtEscapes(std.mem.sliceAsBytes(event.body)) });
         }
     }
 }
@@ -493,13 +434,45 @@ pub fn getDisplayPath(gpa: std.mem.Allocator) ![]u8 {
     return try std.fs.path.join(gpa, &.{ xdg_runtime_dir_path, display_name });
 }
 
-// Let's turn that manual work above into a struct to make things easier to understand.
+/// A wayland packet header
 const Header = extern struct {
     object_id: u32 align(1),
     opcode: u16 align(1),
     size: u16 align(1),
+
+    pub fn read(socket: std.net.Stream) !Header {
+        var header: Header = undefined;
+        const header_bytes_read = try socket.readAll(std.mem.asBytes(&header));
+        if (header_bytes_read < @sizeOf(Header)) {
+            return error.UnexpectedEOF;
+        }
+        return header;
+    }
 };
 
+/// This is the general shape of a Wayland `Event` (a message from the compositor to the client).
+const Event = struct {
+    header: Header,
+    body: []const u8,
+
+    pub fn read(socket: std.net.Stream, body_buffer: *std.ArrayList(u8)) !Event {
+        const header = try Header.read(socket);
+
+        // read bytes until we match the size in the header, not including the bytes in the header.
+        try body_buffer.resize(header.size - @sizeOf(Header));
+        const message_bytes_read = try socket.readAll(body_buffer.items);
+        if (message_bytes_read < body_buffer.items.len) {
+            return error.UnexpectedEOF;
+        }
+
+        return Event{
+            .header = header,
+            .body = body_buffer.items,
+        };
+    }
+};
+
+/// Handles creating a header and writing the request to the socket.
 pub fn writeRequest(socket: std.net.Stream, object_id: u32, opcode: u16, message: []const u32) !void {
     const message_bytes = std.mem.sliceAsBytes(message);
     const header = Header{
