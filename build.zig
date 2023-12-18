@@ -27,8 +27,16 @@ pub fn build(b: *std.Build) void {
     const test_step = b.step("test", "Run library tests");
     test_step.dependOn(&run_main_tests.step);
 
+    const client_connect_raw_exe = b.addExecutable(.{
+        .name = "00_client_connect",
+        .root_source_file = .{ .path = "examples/00_client_connect.zig" },
+        .target = target,
+        .optimize = optimize,
+    });
+    b.installArtifact(client_connect_raw_exe);
+
     const client_connect_exe = b.addExecutable(.{
-        .name = "client_connect",
+        .name = "01_client_connect",
         .root_source_file = .{ .path = "examples/01_client_connect.zig" },
         .target = target,
         .optimize = optimize,
