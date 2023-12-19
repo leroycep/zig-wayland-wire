@@ -6,7 +6,10 @@ pub const xdg = @import("./xdg.zig");
 pub fn getDisplayPath(gpa: std.mem.Allocator) ![]u8 {
     const xdg_runtime_dir_path = try std.process.getEnvVarOwned(gpa, "XDG_RUNTIME_DIR");
     defer gpa.free(xdg_runtime_dir_path);
-    const display_name = try std.process.getEnvVarOwned(gpa, "WAYLAND_DISPLAY");
+    const display_name = std.process.getEnvVarOwned(gpa, "WAYLAND_DISPLAY") catch |err| switch (err) {
+        error.EnvironmentVariableNotFound => return try std.fs.path.join(gpa, &.{ xdg_runtime_dir_path, "wayland-0" }),
+        else => return err,
+    };
     defer gpa.free(display_name);
 
     return try std.fs.path.join(gpa, &.{ xdg_runtime_dir_path, display_name });

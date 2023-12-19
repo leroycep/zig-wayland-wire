@@ -167,6 +167,7 @@ pub fn main() !void {
     // Create a surface using wl_compositor::create_surface
     const surface_id = next_id;
     next_id += 1;
+    // https://wayland.app/protocols/wayland#wl_compositor:request:create_surface
     const WL_COMPOSITOR_REQUEST_CREATE_SURFACE = 0;
     try writeRequest(socket, compositor_id, WL_COMPOSITOR_REQUEST_CREATE_SURFACE, &[_]u32{
         // id: new_id<wl_surface>
@@ -176,6 +177,7 @@ pub fn main() !void {
     // Create an xdg_surface
     const xdg_surface_id = next_id;
     next_id += 1;
+    // https://wayland.app/protocols/xdg-shell#xdg_wm_base:request:get_xdg_surface
     const XDG_WM_BASE_REQUEST_GET_XDG_SURFACE = 2;
     try writeRequest(socket, xdg_wm_base_id, XDG_WM_BASE_REQUEST_GET_XDG_SURFACE, &[_]u32{
         // id: new_id<xdg_surface>
@@ -187,32 +189,25 @@ pub fn main() !void {
     // Get the xdg_surface as an xdg_toplevel object
     const xdg_toplevel_id = next_id;
     next_id += 1;
+    // https://wayland.app/protocols/xdg-shell#xdg_surface:request:get_toplevel
     const XDG_SURFACE_REQUEST_GET_TOPLEVEL = 1;
     try writeRequest(socket, xdg_surface_id, XDG_SURFACE_REQUEST_GET_TOPLEVEL, &[_]u32{
         // id: new_id<xdg_surface>
         xdg_toplevel_id,
     });
 
-    // Commit the surface. This tells wayland that we are done making changes, and it can display all the changes that have been
-    // made so far.
+    // Commit the surface. This tells the compositor that the current batch of
+    // changes is ready, and they can now be applied.
+
+    // https://wayland.app/protocols/wayland#wl_surface:request:commit
     const WL_SURFACE_REQUEST_COMMIT = 6;
     try writeRequest(socket, surface_id, WL_SURFACE_REQUEST_COMMIT, &[_]u32{});
 
-    // create another wl_callback
-    const create_surface_done_id = next_id;
-    next_id += 1;
-    const WL_DISPLAY_REQUEST_DONE = 0;
-    try writeRequest(socket, display_id, WL_DISPLAY_REQUEST_DONE, &[_]u32{create_surface_done_id});
-
     // Wait for the surface to be configured before moving on
-    var done = false;
-    var surface_configured = false;
-    while (!done or !surface_configured) {
+    while (true) {
         const event = try Event.read(socket, &message_buffer);
 
-        if (event.header.object_id == create_surface_done_id) {
-            done = true;
-        } else if (event.header.object_id == xdg_surface_id) {
+        if (event.header.object_id == xdg_surface_id) {
             switch (event.header.opcode) {
                 // https://wayland.app/protocols/xdg-shell#xdg_surface:event:configure
                 0 => {
@@ -226,26 +221,10 @@ pub fn main() !void {
                         serial,
                     });
 
-                    surface_configured = true;
-                },
-                else => return error.InvalidOpcode,
-            }
-        } else if (event.header.object_id == display_id) {
-            switch (event.header.opcode) {
-                // https://wayland.app/protocols/wayland#wl_display:event:error
-                0 => {
-                    const object_id: u32 = @bitCast(event.body[0..4].*);
-                    const error_code: u32 = @bitCast(event.body[4..8].*);
-                    const error_message_len: u32 = @bitCast(event.body[8..12].*);
-                    const error_message = event.body[12 .. error_message_len - 1 :0];
-                    std.log.warn("wl_display:error({}, {}, \"{}\")", .{ object_id, error_code, std.zig.fmtEscapes(error_message) });
-                },
-                // https://wayland.app/protocols/wayland#wl_display:event:delete_id
-                1 => {
-                    // wl_display:delete_id tells us that we can reuse an id. In this article we log it, but
-                    // otherwise ignore it.
-                    const name: u32 = @bitCast(event.body[0..4].*);
-                    std.log.debug("wl_display:delete_id({})", .{name});
+                    try writeRequest(socket, surface_id, WL_SURFACE_REQUEST_COMMIT, &[_]u32{});
+
+                    // The surface has been configured! We can move on
+                    break;
                 },
                 else => return error.InvalidOpcode,
             }
@@ -261,7 +240,6 @@ pub fn main() !void {
 
     const shared_memory_pool_fd = try std.os.memfd_create("my-wayland-framebuffer", 0);
     try std.os.ftruncate(shared_memory_pool_fd, shared_memory_pool_len);
-    const shared_memory_pool_bytes = try std.os.mmap(null, shared_memory_pool_len, std.os.PROT.READ | std.os.PROT.WRITE, std.os.MAP.SHARED, shared_memory_pool_fd, 0);
 
     // Create a wl_shm_pool (wayland shared memory pool). This will be used to create framebuffers,
     // though in this article we only plan on creating one.
@@ -270,14 +248,16 @@ pub fn main() !void {
         shm_id,
         &next_id,
         shared_memory_pool_fd,
-        @intCast(shared_memory_pool_bytes.len),
+        @intCast(shared_memory_pool_len),
     );
 
     // Now we allocate a framebuffer from the shared memory pool
     const wl_buffer_id = next_id;
     next_id += 1;
 
+    // https://wayland.app/protocols/wayland#wl_shm_pool:request:create_buffer
     const WL_SHM_POOL_REQUEST_CREATE_BUFFER = 0;
+    // https://wayland.app/protocols/wayland#wl_shm:enum:format
     const WL_SHM_POOL_ENUM_FORMAT_ARGB8888 = 0;
     try writeRequest(socket, wl_shm_pool_id, WL_SHM_POOL_REQUEST_CREATE_BUFFER, &[_]u32{
         // id: new_id<wl_buffer>,
@@ -294,7 +274,8 @@ pub fn main() !void {
         WL_SHM_POOL_ENUM_FORMAT_ARGB8888,
     });
 
-    // Now we turn the framebuffer we just allocated into a slice on our side for ease of use.
+    // Now we turn the shared memory pool and the framebuffer we just allocated into slices on our side for ease of use.
+    const shared_memory_pool_bytes = try std.os.mmap(null, shared_memory_pool_len, std.os.PROT.READ | std.os.PROT.WRITE, std.os.MAP.SHARED, shared_memory_pool_fd, 0);
     const framebuffer = @as([*]Pixel, @ptrCast(shared_memory_pool_bytes.ptr))[0 .. shared_memory_pool_bytes.len / @sizeOf(Pixel)];
 
     // put some interesting colors into the framebuffer
@@ -363,6 +344,7 @@ pub fn main() !void {
                         // We respond with the number it sent us, so it knows which configure we are responding to.
                         serial,
                     });
+                    try writeRequest(socket, surface_id, WL_SURFACE_REQUEST_COMMIT, &[_]u32{});
                 },
                 else => return error.InvalidOpcode,
             }
@@ -428,7 +410,10 @@ pub fn main() !void {
 pub fn getDisplayPath(gpa: std.mem.Allocator) ![]u8 {
     const xdg_runtime_dir_path = try std.process.getEnvVarOwned(gpa, "XDG_RUNTIME_DIR");
     defer gpa.free(xdg_runtime_dir_path);
-    const display_name = try std.process.getEnvVarOwned(gpa, "WAYLAND_DISPLAY");
+    const display_name = std.process.getEnvVarOwned(gpa, "WAYLAND_DISPLAY") catch |err| switch (err) {
+        error.EnvironmentVariableNotFound => return try std.fs.path.join(gpa, &.{ xdg_runtime_dir_path, "wayland-0" }),
+        else => return err,
+    };
     defer gpa.free(display_name);
 
     return try std.fs.path.join(gpa, &.{ xdg_runtime_dir_path, display_name });
@@ -505,7 +490,7 @@ pub fn writeWlShmRequestCreatePool(socket: std.net.Stream, wl_shm_id: u32, next_
     // documentation calling for 3: wl_shm_pool_id, fd, and size. This is because `fd` is sent in the control message,
     // and so not included in the regular message body.
 
-    // Send the file descriptor through a control message
+    // Create the message header as usual
     const message_bytes = std.mem.sliceAsBytes(&message);
     const header = Header{
         .object_id = wl_shm_id,
@@ -526,6 +511,8 @@ pub fn writeWlShmRequestCreatePool(socket: std.net.Stream, wl_shm_id: u32, next_
             .iov_len = message_bytes.len,
         },
     };
+
+    // Send the file descriptor through a control message
 
     // This is the control message! It is not a fixed size struct. Instead it varies depending on the message you want to send.
     // C uses macros to define it, here we make a comptime function instead.
@@ -552,6 +539,7 @@ pub fn writeWlShmRequestCreatePool(socket: std.net.Stream, wl_shm_id: u32, next_
         return error.ConnectionClosed;
     }
 
+    // Wait to increment until we know the message has been sent
     next_id.* += 1;
     return wl_shm_pool_id;
 }
