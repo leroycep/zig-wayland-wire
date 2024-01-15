@@ -2,6 +2,7 @@ const std = @import("std");
 const testing = std.testing;
 pub const core = @import("./core.zig");
 pub const xdg = @import("./xdg.zig");
+pub const zxdg = @import("./zxdg.zig");
 
 pub fn getDisplayPath(gpa: std.mem.Allocator) ![]u8 {
     const xdg_runtime_dir_path = try std.process.getEnvVarOwned(gpa, "XDG_RUNTIME_DIR");
@@ -340,6 +341,9 @@ pub const IdPool = struct {
     }
 
     pub fn destroy(this: *@This(), id: u32) void {
+        for (this.free_ids.slice()) |existing_id| {
+            if (existing_id == id) return;
+        }
         this.free_ids.append(id) catch {};
     }
 };

@@ -17,7 +17,7 @@ pub const Display = struct {
             message: []const u8,
         },
         delete_id: struct {
-            name: u32,
+            id: u32,
         },
     };
 

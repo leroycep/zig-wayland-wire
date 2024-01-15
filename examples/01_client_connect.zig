@@ -25,6 +25,7 @@ pub fn main() !void {
 
     // create a sync callback so we know when the registry is done listing extensions
     const registry_done_id = id_pool.create();
+    std.debug.print("registry done id: {}\n", .{registry_done_id});
     {
         var buffer: [5]u32 = undefined;
         const message = try wayland.serialize(wayland.core.Display.Request, &buffer, 1, .{ .sync = .{ .callback = registry_done_id } });
@@ -34,6 +35,7 @@ pub fn main() !void {
     var shm_id_opt: ?u32 = null;
     var compositor_id_opt: ?u32 = null;
     var xdg_wm_base_id_opt: ?u32 = null;
+    var zxdg_decoration_manager_id_opt: ?u32 = null;
 
     var message_buffer = std.ArrayList(u32).init(gpa);
     defer message_buffer.deinit();
@@ -95,6 +97,20 @@ pub fn main() !void {
                             } },
                         );
                         try socket.writeAll(std.mem.sliceAsBytes(message));
+                    } else if (std.mem.eql(u8, global.interface, "zxdg_decoration_manager_v1")) {
+                        zxdg_decoration_manager_id_opt = id_pool.create();
+                        const message = try wayland.serialize(
+                            wayland.core.Registry.Request,
+                            &buffer,
+                            registry_id,
+                            .{ .bind = .{
+                                .name = global.name,
+                                .interface = global.interface,
+                                .version = 1,
+                                .new_id = zxdg_decoration_manager_id_opt.?,
+                            } },
+                        );
+                        try socket.writeAll(std.mem.sliceAsBytes(message));
                     }
                 },
                 .global_remove => {},
@@ -153,6 +169,24 @@ pub fn main() !void {
         try socket.writeAll(std.mem.sliceAsBytes(message));
     }
 
+    var zxdg_toplevel_decoration_id_opt: ?u32 = null;
+    if (zxdg_decoration_manager_id_opt) |zxdg_decoration_manager_id| {
+        zxdg_toplevel_decoration_id_opt = id_pool.create();
+        {
+            var buffer: [10]u32 = undefined;
+            const message = try wayland.serialize(
+                wayland.zxdg.DecorationManagerV1.Request,
+                &buffer,
+                zxdg_decoration_manager_id,
+                .{ .get_toplevel_decoration = .{
+                    .new_id = zxdg_toplevel_decoration_id_opt.?,
+                    .toplevel = xdg_toplevel_id,
+                } },
+            );
+            try socket.writeAll(std.mem.sliceAsBytes(message));
+        }
+    }
+
     {
         var buffer: [10]u32 = undefined;
         const message = try wayland.serialize(
@@ -200,6 +234,23 @@ pub fn main() !void {
                     surface_configured = true;
                 },
             }
+        } else if (zxdg_toplevel_decoration_id_opt != null and header.object_id == zxdg_toplevel_decoration_id_opt.?) {
+            const event = try wayland.deserialize(wayland.zxdg.ToplevelDecorationV1.Event, header, message_buffer.items);
+            std.debug.print("<- zxdg_toplevel_decoration@{}\n", .{event});
+            // switch (event) {
+            //     .configure => |_| {
+            //         var buffer: [10]u32 = undefined;
+            //         const message = try wayland.serialize(
+            //             wayland.zxdg.ToplevelDecorationV1.Request,
+            //             &buffer,
+            //             zxdg_toplevel_decoration_id_opt.?,
+            //             .{ .set_mode = .{
+            //                 .mode = .server_side,
+            //             } },
+            //         );
+            //         try socket.writeAll(std.mem.sliceAsBytes(message));
+            //     },
+            // }
         } else if (header.object_id == xdg_toplevel_id) {
             const event = try wayland.deserialize(wayland.xdg.Toplevel.Event, header, message_buffer.items);
             std.debug.print("<- {}\n", .{event});
@@ -214,7 +265,10 @@ pub fn main() !void {
             const event = try wayland.deserialize(wayland.core.Display.Event, header, message_buffer.items);
             switch (event) {
                 .@"error" => |err| std.debug.print("<- error({}): {} {s}\n", .{ err.object_id, err.code, err.message }),
-                .delete_id => |id| id_pool.destroy(id.name),
+                .delete_id => |id| {
+                    std.debug.print("id {} deleted\n", .{id});
+                    id_pool.destroy(id.id);
+                },
             }
         } else {
             std.debug.print("{} {x} \"{}\"\n", .{ header.object_id, header.size_and_opcode.opcode, std.zig.fmtEscapes(std.mem.sliceAsBytes(message_buffer.items)) });
@@ -244,7 +298,7 @@ pub fn main() !void {
         }
     }
 
-    const wl_shm_pool_id = 10;
+    const wl_shm_pool_id = id_pool.create();
     {
         var buffer: [10]u32 = undefined;
         const message = try wayland.serialize(
@@ -283,8 +337,9 @@ pub fn main() !void {
         _ = try std.os.sendmsg(socket.handle, &socket_message, 0);
     }
 
-    const wl_buffer_id = 11;
+    const wl_buffer_id = id_pool.create();
     {
+        std.debug.print("buffer id: {}\n", .{wl_buffer_id});
         var buffer: [10]u32 = undefined;
         const message = try wayland.serialize(
             wayland.core.ShmPool.Request,
@@ -414,7 +469,7 @@ pub fn main() !void {
             const event = try wayland.deserialize(wayland.core.Display.Event, header, message_buffer.items);
             switch (event) {
                 .@"error" => |err| std.debug.print("<- error({}): {} {s}\n", .{ err.object_id, err.code, err.message }),
-                .delete_id => |id| id_pool.destroy(id.name),
+                .delete_id => |id| id_pool.destroy(id.id),
             }
         } else {
             std.debug.print("{} {x} \"{}\"\n", .{ header.object_id, header.size_and_opcode.opcode, std.zig.fmtEscapes(std.mem.sliceAsBytes(message_buffer.items)) });
