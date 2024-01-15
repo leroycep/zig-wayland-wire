@@ -370,6 +370,16 @@ pub fn main() !void {
                         } },
                     );
                     try socket.writeAll(std.mem.sliceAsBytes(message));
+
+                    // commit the configuration
+                    var buffer2: [10]u32 = undefined;
+                    const message2 = try wayland.serialize(
+                        wayland.core.Surface.Request,
+                        &buffer2,
+                        surface_id,
+                        wayland.core.Surface.Request.commit,
+                    );
+                    try socket.writeAll(std.mem.sliceAsBytes(message2));
                 },
             }
         } else if (header.object_id == xdg_toplevel_id) {
@@ -384,6 +394,22 @@ pub fn main() !void {
         } else if (header.object_id == wl_buffer_id) {
             const event = try wayland.deserialize(wayland.core.Buffer.Event, header, message_buffer.items);
             std.debug.print("<- wl_buffer@{} {}\n", .{ header.object_id, event });
+        } else if (header.object_id == xdg_wm_base_id) {
+            const event = try wayland.deserialize(wayland.xdg.WmBase.Event, header, message_buffer.items);
+            switch (event) {
+                .ping => |ping| {
+                    var buffer: [10]u32 = undefined;
+                    const message = try wayland.serialize(
+                        wayland.xdg.WmBase.Request,
+                        &buffer,
+                        xdg_wm_base_id,
+                        .{ .pong = .{
+                            .serial = ping.serial,
+                        } },
+                    );
+                    try socket.writeAll(std.mem.sliceAsBytes(message));
+                },
+            }
         } else if (header.object_id == 1) {
             const event = try wayland.deserialize(wayland.core.Display.Event, header, message_buffer.items);
             switch (event) {
