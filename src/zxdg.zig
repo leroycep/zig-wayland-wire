@@ -1,4 +1,7 @@
 pub const DecorationManagerV1 = struct {
+    pub const INTERFACE = "zxdg_decoration_manager_v1";
+    pub const VERSION = 1;
+
     pub const Request = union(Request.Tag) {
         destroy: void,
         get_toplevel_decoration: struct {

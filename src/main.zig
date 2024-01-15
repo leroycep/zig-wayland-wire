@@ -347,3 +347,69 @@ pub const IdPool = struct {
         this.free_ids.append(id) catch {};
     }
 };
+
+pub fn registerGlobals(alloc: std.mem.Allocator, id_pool: *IdPool, socket: std.net.Stream, comptime T: []const type) ![T.len]?u32 {
+    const Item = struct { version: u32, index: u32 };
+    const Pair = struct { []const u8, Item };
+    comptime var kvs_list: []const Pair = &[_]Pair{};
+    inline for (T, 0..) |t, i| {
+        // if (!@hasField(t, "INTERFACE")) @compileError("Missing INTERFACE for " ++ @typeName(t));
+        // if (!@hasField(t, "VERSION")) @compileError("Missing VERSION for " ++ @typeName(t));
+        kvs_list = kvs_list ++ &[_]Pair{.{ t.INTERFACE, .{ .version = t.VERSION, .index = i } }};
+    }
+    const map = std.ComptimeStringMap(Item, kvs_list);
+
+    const registry_id = id_pool.create();
+    {
+        var buffer: [5]u32 = undefined;
+        const message = try serialize(core.Display.Request, &buffer, 1, .{ .get_registry = .{ .registry = registry_id } });
+        try socket.writeAll(std.mem.sliceAsBytes(message));
+    }
+
+    const registry_done_id = id_pool.create();
+    {
+        var buffer: [5]u32 = undefined;
+        const message = try serialize(core.Display.Request, &buffer, 1, .{ .sync = .{ .callback = registry_done_id } });
+        try socket.writeAll(std.mem.sliceAsBytes(message));
+    }
+
+    var ids: [T.len]?u32 = [_]?u32{null} ** T.len;
+    var message_buffer = std.ArrayList(u32).init(alloc);
+    defer message_buffer.deinit();
+    while (true) {
+        var header: Header = undefined;
+        const header_bytes_read = try socket.readAll(std.mem.asBytes(&header));
+        if (header_bytes_read < @sizeOf(Header)) break;
+
+        try message_buffer.resize((header.size_and_opcode.size - @sizeOf(Header)) / @sizeOf(u32));
+        const bytes_read = try socket.readAll(std.mem.sliceAsBytes(message_buffer.items));
+        message_buffer.shrinkRetainingCapacity(bytes_read / @sizeOf(u32));
+
+        if (header.object_id == registry_id) {
+            const event = try deserialize(core.Registry.Event, header, message_buffer.items);
+            switch (event) {
+                .global => |global| {
+                    var buffer: [20]u32 = undefined;
+                    if (map.get(global.interface)) |item| {
+                        const new_id = id_pool.create();
+                        ids[item.index] = new_id;
+                        const message = try serialize(core.Registry.Request, &buffer, registry_id, .{ .bind = .{
+                            .name = global.name,
+                            .interface = global.interface,
+                            .version = item.version,
+                            .new_id = new_id,
+                        } });
+                        try socket.writeAll(std.mem.sliceAsBytes(message));
+                    }
+                },
+                .global_remove => {},
+            }
+        } else if (header.object_id == registry_done_id) {
+            break;
+        } else {
+            std.log.info("{} {x} \"{}\"", .{ header.object_id, header.size_and_opcode.opcode, std.zig.fmtEscapes(std.mem.sliceAsBytes(message_buffer.items)) });
+        }
+    }
+
+    return ids;
+}

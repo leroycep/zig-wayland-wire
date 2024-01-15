@@ -1,4 +1,7 @@
 pub const WmBase = struct {
+    pub const INTERFACE = "xdg_wm_base";
+    pub const VERSION = 4;
+
     pub const Request = union(Request.Tag) {
         destroy: void,
         create_positioner: struct {

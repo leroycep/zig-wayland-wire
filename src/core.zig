@@ -53,6 +53,7 @@ pub const Registry = struct {
 
 pub const Compositor = struct {
     pub const INTERFACE = "wl_compositor";
+    pub const VERSION = 5;
 
     pub const Request = union(enum) {
         create_surface: struct {
@@ -82,6 +83,9 @@ pub const ShmPool = struct {
 };
 
 pub const Shm = struct {
+    pub const INTERFACE = "wl_shm";
+    pub const VERSION = 1;
+
     pub const Request = union(enum) {
         create_pool: struct {
             new_id: u32,
@@ -172,6 +176,9 @@ pub const Buffer = struct {
 };
 
 pub const Seat = struct {
+    pub const INTERFACE = "wl_seat";
+    pub const VERSION = 8;
+
     pub const Request = union(enum) {
         get_pointer: struct {
             new_id: u32,
