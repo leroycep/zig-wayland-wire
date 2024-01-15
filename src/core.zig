@@ -170,3 +170,173 @@ pub const Buffer = struct {
         release: void,
     };
 };
+
+pub const Seat = struct {
+    pub const Request = union(enum) {
+        get_pointer: struct {
+            new_id: u32,
+        },
+        get_keyboard: struct {
+            new_id: u32,
+        },
+        get_touch: struct {
+            new_id: u32,
+        },
+        release: void,
+    };
+
+    pub const Event = union(enum) {
+        capabilities: struct {
+            capability: u32,
+        },
+        name: struct {
+            name: []const u8,
+        },
+    };
+
+    pub const Capability = packed struct(u32) {
+        pointer: bool,
+        keyboard: bool,
+        touch: bool,
+        _unused: u29,
+    };
+
+    pub const Error = enum(u32) {};
+};
+
+pub const Pointer = struct {
+    pub const Request = union(enum) {
+        set_cursor: struct {
+            serial: u32,
+            surface: u32,
+            hotspot_x: i32,
+            hotspot_y: i32,
+        },
+        release: void,
+    };
+
+    pub const Event = union(enum) {
+        enter: struct {
+            serial: u32,
+            surface: u32,
+            surface_x: u32,
+            surface_y: u32,
+        },
+        leave: struct {
+            serial: u32,
+            surface: u32,
+        },
+        motion: struct {
+            time: u32,
+            surface_x: i32, //i24.8
+            surface_y: i32, //i24.8
+        },
+        button: struct {
+            serial: u32,
+            time: u32,
+            button: u32,
+            state: ButtonState,
+        },
+        axis: struct {
+            time: u32,
+            axis: Axis,
+            value: i32, //i24.8
+        },
+        frame: void,
+        axis_source: struct {
+            axis_source: u32,
+        },
+        axis_stop: struct {
+            time: u32,
+            axis: Axis,
+        },
+        axis_discrete: struct {
+            axis: Axis,
+            discrete: i32,
+        },
+        axis_value120: struct {
+            axis: Axis,
+            value120: i32,
+        },
+        axis_relative_direction: struct {
+            axis: Axis,
+            direction: AxisRelativeDirection,
+        },
+    };
+
+    pub const Error = enum(u32) {
+        role,
+    };
+
+    pub const ButtonState = enum(u32) {
+        released,
+        pressed,
+    };
+
+    pub const Axis = enum(u32) {
+        vertical_scroll,
+        horizontal_scroll,
+    };
+
+    pub const AxisSource = enum(u32) {
+        wheel,
+        finger,
+        continuous,
+        wheel_tilt,
+    };
+
+    pub const AxisRelativeDirection = enum(u32) {
+        identical,
+        inverted,
+    };
+};
+
+pub const Keyboard = struct {
+    pub const Request = union(enum) {
+        release: void,
+    };
+
+    pub const Event = union(enum) {
+        keymap: struct {
+            format: KeymapFormat,
+            // fd: u32,
+            size: u32,
+        },
+        enter: struct {
+            serial: u32,
+            surface: u32,
+            keys: []const u32,
+        },
+        leave: struct {
+            serial: u32,
+            surface: u32,
+        },
+        key: struct {
+            serial: u32,
+            time: u32,
+            key: u32,
+            state: KeyState,
+        },
+        modifiers: struct {
+            serial: u32,
+            mods_depressed: u32,
+            mods_latched: u32,
+            mods_locked: u32,
+            group: u32,
+        },
+        repeat_info: struct {
+            rate: i32,
+            delay: i32,
+        },
+    };
+
+    pub const KeymapFormat = enum(u32) {
+        no_keymap,
+        xkb_v1,
+    };
+
+    pub const KeyState = enum(u32) {
+        released,
+        pressed,
+    };
+};
