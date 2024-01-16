@@ -416,6 +416,10 @@ pub fn registerGlobals(alloc: std.mem.Allocator, id_pool: *IdPool, socket: std.n
                 .global => |global| {
                     var buffer: [20]u32 = undefined;
                     if (map.get(global.interface)) |item| {
+                        if (global.version < item.version) {
+                            // TODO: Add diagnostics API
+                            return error.OutdatedCompositorProtocol;
+                        }
                         const new_id = id_pool.create();
                         ids[item.index] = new_id;
                         const message = try serialize(core.Registry.Request, &buffer, registry_id, .{ .bind = .{
