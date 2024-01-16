@@ -128,7 +128,7 @@ pub fn main() !void {
                     std.debug.print("<- wl_seat.name = {s}\n", .{name.name});
                 },
             }
-        } else if (header.object_id == 1) {
+        } else if (header.object_id == DISPLAY_ID) {
             const event = try wayland.deserialize(wayland.core.Display.Event, header, body);
             switch (event) {
                 .@"error" => |err| std.debug.print("<- error({}): {} {s}\n", .{ err.object_id, err.code, err.message }),
@@ -304,12 +304,19 @@ pub fn main() !void {
         } else if (header.object_id == wl_keyboard_id) {
             const event = try wayland.deserialize(wayland.core.Keyboard.Event, header, body);
             switch (event) {
-                // .keymap => |keymap| {},
+                .keymap => |keymap| {
+                    const fd = conn.fd_queue.orderedRemove(0);
+                    std.debug.print("keymap format={}, size={}, fd={}\n", .{
+                        keymap.format,
+                        keymap.size,
+                        fd,
+                    });
+                },
                 else => {
                     std.debug.print("<- wl_keyboard@{}\n", .{event});
                 },
             }
-        } else if (header.object_id == 1) {
+        } else if (header.object_id == DISPLAY_ID) {
             const event = try wayland.deserialize(wayland.core.Display.Event, header, body);
             switch (event) {
                 .@"error" => |err| std.debug.print("<- error({}): {} {s}\n", .{ err.object_id, err.code, err.message }),
