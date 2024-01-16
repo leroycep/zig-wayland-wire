@@ -353,8 +353,6 @@ pub fn registerGlobals(alloc: std.mem.Allocator, id_pool: *IdPool, socket: std.n
     const Pair = struct { []const u8, Item };
     comptime var kvs_list: []const Pair = &[_]Pair{};
     inline for (T, 0..) |t, i| {
-        // if (!@hasField(t, "INTERFACE")) @compileError("Missing INTERFACE for " ++ @typeName(t));
-        // if (!@hasField(t, "VERSION")) @compileError("Missing VERSION for " ++ @typeName(t));
         kvs_list = kvs_list ++ &[_]Pair{.{ t.INTERFACE, .{ .version = t.VERSION, .index = i } }};
     }
     const map = std.ComptimeStringMap(Item, kvs_list);
@@ -407,9 +405,76 @@ pub fn registerGlobals(alloc: std.mem.Allocator, id_pool: *IdPool, socket: std.n
         } else if (header.object_id == registry_done_id) {
             break;
         } else {
-            std.log.info("{} {x} \"{}\"", .{ header.object_id, header.size_and_opcode.opcode, std.zig.fmtEscapes(std.mem.sliceAsBytes(message_buffer.items)) });
+            std.log.info("{} {x} \"{}\"", .{
+                header.object_id,
+                header.size_and_opcode.opcode,
+                std.zig.fmtEscapes(std.mem.sliceAsBytes(message_buffer.items)),
+            });
         }
     }
 
     return ids;
 }
+
+pub const Conn = struct {
+    allocator: std.mem.Allocator,
+    send_buffer: []u32,
+    recv_buffer: []u32,
+    socket: std.net.Stream,
+
+    pub fn init(alloc: std.mem.Allocator, display_path: []const u8) !Conn {
+        const send_buffer = try alloc.alloc(u32, 16);
+        const recv_buffer = try alloc.alloc(u32, 16);
+        return .{
+            .allocator = alloc,
+            .send_buffer = send_buffer,
+            .recv_buffer = recv_buffer,
+            .socket = try std.net.connectUnixSocket(display_path),
+        };
+    }
+
+    pub fn deinit(conn: *Conn) void {
+        conn.allocator.free(conn.send_buffer);
+        conn.allocator.free(conn.recv_buffer);
+        conn.socket.close();
+    }
+
+    pub fn send(conn: *Conn, comptime Signature: type, id: u32, message: Signature) !void {
+        const msg = while (true) {
+            const msg = serialize(
+                Signature,
+                conn.send_buffer,
+                id,
+                message,
+            ) catch |e| switch (e) {
+                error.OutOfMemory => {
+                    conn.send_buffer = try conn.allocator.realloc(conn.send_buffer, conn.send_buffer.len * 2);
+                    continue;
+                },
+            };
+
+            break msg;
+        };
+        try conn.socket.writeAll(std.mem.sliceAsBytes(msg));
+    }
+
+    pub const Message = struct { Header, []const u32 };
+    pub fn recv(conn: *Conn) !Message {
+        var header: Header = undefined;
+        const header_bytes_read = try conn.socket.readAll(std.mem.asBytes(&header));
+        if (header_bytes_read < @sizeOf(Header)) {
+            return error.SocketClosed;
+        }
+
+        const msg_size = (header.size_and_opcode.size - @sizeOf(Header)) / @sizeOf(u32);
+        if (msg_size > conn.recv_buffer.len) {
+            var new_size = conn.recv_buffer.len * 2;
+            while (new_size < msg_size) new_size *= 2;
+            conn.recv_buffer = try conn.allocator.realloc(conn.recv_buffer, new_size);
+        }
+        const bytes_read = try conn.socket.readAll(std.mem.sliceAsBytes(conn.recv_buffer[0..msg_size]));
+        const message = conn.recv_buffer[0 .. bytes_read / @sizeOf(u32)];
+
+        return .{ header, message };
+    }
+};
