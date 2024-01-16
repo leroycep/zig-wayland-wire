@@ -196,41 +196,16 @@ pub fn main() !void {
 
     const wl_shm_pool_id = id_pool.create();
     {
-        var buffer: [10]u32 = undefined;
-        const message = try wayland.serialize(
+        std.debug.print("framebuffer_fd: {}\n", .{framebuffer_fd});
+        try conn.send(
             wayland.core.Shm.Request,
-            &buffer,
             shm_id,
             .{ .create_pool = .{
                 .new_id = wl_shm_pool_id,
+                .fd = @enumFromInt(framebuffer_fd),
                 .size = framebuffer_file_len,
             } },
         );
-        // Send the file descriptor through a control message
-        const message_bytes = std.mem.sliceAsBytes(message);
-        const msg_iov = [_]std.os.iovec_const{
-            .{
-                .iov_base = message_bytes.ptr,
-                .iov_len = message_bytes.len,
-            },
-        };
-        const control_message = cmsg(std.os.fd_t){
-            .level = std.os.SOL.SOCKET,
-            .type = 0x01, // value of SCM_RIGHTS
-            .data = framebuffer_fd,
-        };
-        const socket_message = std.os.msghdr_const{
-            .name = null,
-            .namelen = 0,
-            .iov = &msg_iov,
-            .iovlen = msg_iov.len,
-            // .control = null,
-            // .controllen = 0,
-            .control = &control_message,
-            .controllen = @sizeOf(cmsg(std.os.fd_t)),
-            .flags = 0,
-        };
-        _ = try std.os.sendmsg(conn.socket.handle, &socket_message, 0);
     }
 
     const wl_buffer_id = id_pool.create();

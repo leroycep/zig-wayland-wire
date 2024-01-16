@@ -3,6 +3,7 @@ const testing = std.testing;
 pub const core = @import("./core.zig");
 pub const xdg = @import("./xdg.zig");
 pub const zxdg = @import("./zxdg.zig");
+pub const types = @import("./types.zig");
 
 pub fn getDisplayPath(gpa: std.mem.Allocator) ![]u8 {
     const xdg_runtime_dir_path = try std.process.getEnvVarOwned(gpa, "XDG_RUNTIME_DIR");
@@ -112,6 +113,7 @@ pub fn deserializeArguments(comptime Signature: type, buffer: []const u32) !Sign
     var result: Signature = undefined;
     var pos: usize = 0;
     inline for (std.meta.fields(Signature)) |field| {
+        if (field.type == types.Fd) continue; // Must be handled
         switch (@typeInfo(field.type)) {
             .Int => |int_info| switch (int_info.signedness) {
                 .signed => @field(result, field.name) = try readInt(buffer, &pos),
@@ -169,11 +171,36 @@ pub fn calculateSerializedWordLen(comptime Signature: type, message: Signature) 
     return pos;
 }
 
+pub fn countFds(comptime Signature: type) usize {
+    if (Signature == void) return 0;
+    var count: usize = 0;
+    inline for (std.meta.fields(Signature)) |field| {
+        if (field.type == types.Fd) {
+            count += 1;
+        }
+    }
+    return count;
+}
+
+pub fn extractFds(comptime Signature: type, message: *const Signature) [countFds(Signature)]*const types.Fd {
+    if (Signature == void) return [_]*const types.Fd{};
+    var fds: [countFds(Signature)]*const types.Fd = undefined;
+    var i: usize = 0;
+    inline for (std.meta.fields(Signature)) |field| {
+        if (field.type == types.Fd) {
+            fds[i] = &@field(message, field.name);
+            i += 1;
+        }
+    }
+    return fds;
+}
+
 /// Message must live until the iovec array is written.
 pub fn serializeArguments(comptime Signature: type, buffer: []u32, message: Signature) ![]u32 {
     if (Signature == void) return buffer[0..0];
     var pos: usize = 0;
     inline for (std.meta.fields(Signature)) |field| {
+        if (field.type == types.Fd) continue;
         switch (@typeInfo(field.type)) {
             .Int => {
                 if (pos >= buffer.len) return error.OutOfMemory;
@@ -416,6 +443,17 @@ pub fn registerGlobals(alloc: std.mem.Allocator, id_pool: *IdPool, socket: std.n
     return ids;
 }
 
+fn cmsg(comptime T: type) type {
+    const padding_size = (@sizeOf(T) + @sizeOf(c_long) - 1) & ~(@as(usize, @sizeOf(c_long)) - 1);
+    return extern struct {
+        len: c_ulong = @sizeOf(@This()) - padding_size,
+        level: c_int,
+        type: c_int,
+        data: T,
+        _padding: [padding_size]u8 align(1) = [_]u8{0} ** padding_size,
+    };
+}
+
 pub const Conn = struct {
     allocator: std.mem.Allocator,
     send_buffer: []u32,
@@ -455,11 +493,40 @@ pub const Conn = struct {
 
             break msg;
         };
-        try conn.socket.writeAll(std.mem.sliceAsBytes(msg));
+        const msg_bytes = std.mem.sliceAsBytes(msg);
+        const msg_iov = [_]std.os.iovec_const{
+            .{
+                .iov_base = msg_bytes.ptr,
+                .iov_len = msg_bytes.len,
+            },
+        };
+        const fds = switch (message) {
+            inline else => |*payload| extractFds(@TypeOf(payload.*), payload),
+        };
+        var ctrl_msgs: [fds.len]cmsg(std.os.fd_t) = undefined;
+        for (fds, 0..) |fdp, i| {
+            std.debug.print("fd {}: {}\n", .{ i, fdp.* });
+            ctrl_msgs[i] = .{
+                .level = std.os.SOL.SOCKET,
+                .type = 0x01,
+                .data = @intFromEnum(fdp.*),
+            };
+        }
+        const socket_msg = std.os.msghdr_const{
+            .name = null,
+            .namelen = 0,
+            .iov = &msg_iov,
+            .iovlen = msg_iov.len,
+            .control = &ctrl_msgs,
+            .controllen = @intCast(@sizeOf(cmsg(std.os.fd_t)) * ctrl_msgs.len),
+            .flags = 0,
+        };
+        _ = try std.os.sendmsg(conn.socket.handle, &socket_msg, 0);
     }
 
     pub const Message = struct { Header, []const u32 };
     pub fn recv(conn: *Conn) !Message {
+        // TODO: recvmesg and read fds
         var header: Header = undefined;
         const header_bytes_read = try conn.socket.readAll(std.mem.asBytes(&header));
         if (header_bytes_read < @sizeOf(Header)) {

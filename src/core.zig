@@ -1,3 +1,5 @@
+const types = @import("types.zig");
+
 pub const Display = struct {
     pub const Request = union(enum) {
         sync: struct {
@@ -90,7 +92,7 @@ pub const Shm = struct {
         create_pool: struct {
             new_id: u32,
             // file descriptors are sent through a control message
-            // fd: u32,
+            fd: types.Fd,
             size: u32,
         },
     };
@@ -306,7 +308,7 @@ pub const Keyboard = struct {
     pub const Event = union(enum) {
         keymap: struct {
             format: KeymapFormat,
-            // fd: u32,
+            fd: types.Fd,
             size: u32,
         },
         enter: struct {
