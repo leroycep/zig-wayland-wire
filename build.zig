@@ -5,7 +5,7 @@ pub fn build(b: *std.Build) void {
     const optimize = b.standardOptimizeOption(.{});
 
     const module = b.addModule("wayland", .{
-        .source_file = .{ .path = "src/main.zig" },
+        .root_source_file = .{ .path = "src/main.zig" },
     });
 
     const lib = b.addStaticLibrary(.{
@@ -41,6 +41,6 @@ pub fn build(b: *std.Build) void {
         .target = target,
         .optimize = optimize,
     });
-    client_connect_exe.addModule("wayland", module);
+    client_connect_exe.root_module.addImport("wayland", module);
     b.installArtifact(client_connect_exe);
 }
