@@ -589,3 +589,25 @@ pub const Conn = struct {
         return .{ header, message };
     }
 };
+
+// pub const XKBKeymap = struct {
+//     keycodes: Keycodes,
+//     types: Types,
+//     compatability: Compatability,
+//     symbols: Symbols,
+//
+//     const Keycodes = struct {
+//         min: usize,
+//         max: usize,
+//         map: std.AutoHashMap(usize, usize),
+//         indicators: std.StringHashMap(usize),
+//     };
+//
+//     const ISOKEY = [4]u8;
+//
+//     const Types = struct {};
+//     const Compatability = struct {};
+//     const Symbols = struct {};
+//
+//     pub fn parse() {}
+// };

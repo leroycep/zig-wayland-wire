@@ -1,5 +1,6 @@
 const std = @import("std");
 const wayland = @import("wayland");
+const xkbcommon = @import("xkbcommon");
 
 pub fn main() !void {
     var general_allocator = std.heap.GeneralPurposeAllocator(.{}){};
@@ -258,6 +259,17 @@ pub fn main() !void {
     );
 
     var window_size: [2]u32 = [2]u32{ @intCast(framebuffer_size[0]), @intCast(framebuffer_size[1]) };
+    const xkb_ctx = xkbcommon.Context.new(.no_flags) orelse return error.XKBInit;
+    defer xkb_ctx.unref();
+
+    var xkb_keymap_opt: ?*xkbcommon.Keymap = null;
+    defer if (xkb_keymap_opt) |xkb_keymap| {
+        xkb_keymap.unref();
+    };
+    var xkb_state_opt: ?*xkbcommon.State = null;
+    defer if (xkb_state_opt) |xkb_state| {
+        xkb_state.unref();
+    };
 
     var running = true;
     while (running) {
@@ -379,6 +391,32 @@ pub fn main() !void {
                         keymap.size,
                         fd,
                     });
+                    const mem = try std.os.mmap(
+                        null,
+                        keymap.size,
+                        std.os.PROT.READ,
+                        std.os.MAP.PRIVATE,
+                        fd,
+                        0,
+                    );
+                    std.debug.print("---START xkb file---\n{s}\n---END xkb file---\n", .{mem});
+                    xkb_keymap_opt = xkbcommon.Keymap.newFromString(xkb_ctx, @ptrCast(mem), .text_v1, .no_flags) orelse return error.XKBKeymap;
+                    xkb_state_opt = xkbcommon.State.new(xkb_keymap_opt.?) orelse return error.XKBStateInit;
+                },
+                .key => |key| {
+                    if (xkb_state_opt) |xkb_state| {
+                        const keycode: xkbcommon.Keycode = key.key + 8;
+                        const keysym: xkbcommon.Keysym = xkb_state.keyGetOneSym(keycode);
+                        var buf: [64]u8 = undefined;
+                        const name_len = keysym.getName(&buf, buf.len);
+                        std.debug.print("{s}\n", .{buf[0..@intCast(name_len)]});
+
+                        const changed = if (key.state == .pressed)
+                            xkb_state.updateKey(keycode, .down)
+                        else
+                            xkb_state.updateKey(keycode, .up);
+                        _ = changed;
+                    }
                 },
                 else => {
                     std.debug.print("<- wl_keyboard@{}\n", .{event});

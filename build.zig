@@ -4,6 +4,10 @@ pub fn build(b: *std.Build) void {
     const target = b.standardTargetOptions(.{});
     const optimize = b.standardOptimizeOption(.{});
 
+    const xkbcommon_module = b.createModule(.{
+        .root_source_file = .{ .path = "deps/zig-xkbcommon/src/xkbcommon.zig" },
+    });
+
     const module = b.addModule("wayland", .{
         .root_source_file = .{ .path = "src/main.zig" },
     });
@@ -42,5 +46,8 @@ pub fn build(b: *std.Build) void {
         .optimize = optimize,
     });
     client_connect_exe.root_module.addImport("wayland", module);
+    client_connect_exe.root_module.addImport("xkbcommon", xkbcommon_module);
+    client_connect_exe.linkLibC();
+    client_connect_exe.linkSystemLibrary("xkbcommon");
     b.installArtifact(client_connect_exe);
 }
