@@ -5,6 +5,8 @@ const font8x8 = @cImport({
     @cInclude("font8x8.h");
 });
 
+const Pixel = [4]u8;
+
 pub fn main() !void {
     var general_allocator = std.heap.GeneralPurposeAllocator(.{}){};
     defer _ = general_allocator.deinit();
@@ -176,8 +178,7 @@ pub fn main() !void {
     const wl_keyboard_id = wl_keyboard_id_opt orelse return error.MissingKeyboard;
 
     // allocate a shared memory file for display purposes
-    const Pixel = [4]u8;
-    const framebuffer_size = [2]usize{ 128, 128 };
+    const framebuffer_size = [2]u32{ 128, 128 };
     const pool_file_len = 1024 * framebuffer_size[0] * framebuffer_size[1] * @sizeOf(Pixel);
 
     const pool_fd = try std.os.memfd_create("my-wayland-framebuffer", 0);
@@ -190,17 +191,7 @@ pub fn main() !void {
     const framebuffer = try pool_alloc.alloc(Pixel, framebuffer_size[0] * framebuffer_size[1]);
 
     // put some interesting colors into the framebuffer
-    for (0..framebuffer_size[1]) |y| {
-        const row = framebuffer[y * framebuffer_size[0] .. (y + 1) * framebuffer_size[0]];
-        for (row, 0..framebuffer_size[0]) |*pixel, x| {
-            pixel.* = .{
-                @truncate(x),
-                @truncate(y),
-                0x00,
-                0xFF,
-            };
-        }
-    }
+    renderGradient(framebuffer, framebuffer_size);
 
     const wl_shm_pool_id = id_pool.create();
     {
@@ -295,43 +286,10 @@ pub fn main() !void {
                     try framebuffers.put(new_buffer_id, new_framebuffer);
 
                     // put some interesting colors into the new_framebuffer
-                    for (0..window_size[1]) |y| {
-                        const row = new_framebuffer[y * window_size[0] .. (y + 1) * window_size[0]];
-                        for (row, 0..window_size[0]) |*pixel, x| {
-                            pixel.* = .{
-                                @truncate(x),
-                                @truncate(y),
-                                0x00,
-                                0xFF,
-                            };
-                        }
-                    }
+                    renderGradient(new_framebuffer, window_size);
 
                     // blit some characters
-                    for (0..window_size[1]) |y| {
-                        const row = new_framebuffer[y * window_size[0] .. (y + 1) * window_size[0]];
-                        for (row, 0..window_size[0]) |*pixel, x| {
-                            const which_char = '!' + (x / 8) + ((y / 8) * (window_size[0] / 8));
-                            if (which_char >= 128) continue;
-                            const char = font8x8.font8x8_basic[which_char];
-                            const line = char[y % 8];
-                            if ((line >> @intCast(x % 8)) & 0x1 != 0) {
-                                pixel.* = .{
-                                    0xFF,
-                                    0xFF,
-                                    0xFF,
-                                    0xFF,
-                                };
-                            } else {
-                                pixel.* = .{
-                                    0x00,
-                                    0x00,
-                                    0x00,
-                                    0xFF,
-                                };
-                            }
-                        }
-                    }
+                    renderText(new_framebuffer, window_size, .{ 10, 10 }, "Hello, World!");
 
                     try conn.send(
                         wayland.core.ShmPool.Request,
@@ -480,4 +438,54 @@ fn cmsg(comptime T: type) type {
         data: T,
         _padding: [padding_size]u8 align(1) = [_]u8{0} ** padding_size,
     };
+}
+
+fn renderGradient(framebuffer: []Pixel, fb_size: [2]u32) void {
+    for (0..fb_size[1]) |y| {
+        const row = framebuffer[y * fb_size[0] .. (y + 1) * fb_size[0]];
+        for (row, 0..fb_size[0]) |*pixel, x| {
+            pixel.* = .{
+                @truncate(x),
+                @truncate(y),
+                0x00,
+                0xFF,
+            };
+        }
+    }
+}
+
+fn textWidth(str: []const u8) usize {
+    return std.unicode.utf8CountCodepoints(str) catch 0; // incorrect, but I'm going with it
+}
+
+fn renderText(framebuffer: []Pixel, fb_size: [2]u32, pos: [2]usize, str: []const u8) void {
+    const top, const left = pos;
+    const bot = @min(top + 8, fb_size[1]);
+    const right = @min(left + textWidth(str) * 8, fb_size[0]);
+
+    for (top..bot) |y| {
+        const row = framebuffer[y * fb_size[0] .. (y + 1) * fb_size[0]];
+        for (row[left..right], left..right) |*pixel, x| {
+            const col = ((x - left) / 8);
+            const which_char = str[col];
+            if (!std.ascii.isPrint(which_char)) continue;
+            const char = font8x8.font8x8_basic[which_char];
+            const line = char[(y - top) % 8];
+            if ((line >> @intCast((x - left) % 8)) & 0x1 != 0) {
+                pixel.* = .{
+                    0xFF,
+                    0xFF,
+                    0xFF,
+                    0xFF,
+                };
+            } else {
+                pixel.* = .{
+                    0x00,
+                    0x00,
+                    0x00,
+                    0xFF,
+                };
+            }
+        }
+    }
 }
