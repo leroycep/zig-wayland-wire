@@ -4,8 +4,32 @@ const xkbcommon = @import("xkbcommon");
 const font8x8 = @cImport({
     @cInclude("font8x8.h");
 });
+const PieceTable = @import("PieceTable.zig").PieceTable;
 
 const Pixel = [4]u8;
+const Theme = struct {
+    const background = 0x282A36;
+    const current_line = 0x44475A;
+    const foreground = 0xF8F8F2;
+    const comment = 0x6272A4;
+
+    const cyan = 0x8BE9FD;
+    const green = 0x50FA7B;
+    const orange = 0xFFB86C;
+    const pink = 0xFF79C6;
+    const purple = 0xBD93F9;
+    const red = 0xFF5555;
+    const yellow = 0xF1FA8C;
+};
+
+fn toPixel(color: u24) Pixel {
+    return .{
+        @intCast(color & 0xFF),
+        @intCast(color >> 8 & 0xFF),
+        @intCast(color >> 16 & 0xFF),
+        0xFF,
+    };
+}
 
 pub fn main() !void {
     var general_allocator = std.heap.GeneralPurposeAllocator(.{}){};
@@ -27,6 +51,7 @@ pub fn main() !void {
         wayland.xdg.WmBase,
         wayland.core.Seat,
         wayland.zxdg.DecorationManagerV1,
+        wayland.zwp.TextInputManagerV3,
     });
 
     const DISPLAY_ID = 1;
@@ -34,6 +59,7 @@ pub fn main() !void {
     const compositor_id = ids[1] orelse return error.NeccessaryWaylandExtensionMissing;
     const xdg_wm_base_id = ids[2] orelse return error.NeccessaryWaylandExtensionMissing;
     const wl_seat_id = ids[3] orelse return error.NeccessaryWaylandExtensionMissing;
+    const zwp_text_input_manager_v3 = ids[5] orelse return error.NeccessaryWaylandExtensionMissing;
 
     const surface_id = id_pool.create();
     try conn.send(
@@ -60,6 +86,16 @@ pub fn main() !void {
         xdg_surface_id,
         .{ .get_toplevel = .{
             .id = xdg_toplevel_id,
+        } },
+    );
+
+    const zwp_text_input_v3_id = id_pool.create();
+    try conn.send(
+        wayland.zwp.TextInputManagerV3.Request,
+        zwp_text_input_manager_v3,
+        .{ .get_text_input = .{
+            .id = zwp_text_input_v3_id,
+            .seat = wl_seat_id,
         } },
     );
 
@@ -265,6 +301,20 @@ pub fn main() !void {
         xkb_state.unref();
     };
 
+    var piece_table = try PieceTable.init(gpa, "Hello, World!");
+    defer piece_table.deinit();
+
+    var edit_buffer: [1024]u8 = [1]u8{0} ** 1024;
+    var edit_slice: ?[]u8 = null;
+
+    var delete_before: usize = 0;
+    var delete_after: usize = 0;
+
+    // var preedit_buffer: [1024]u8 = [1]u8{0} ** 1024;
+    // var preedit_slice: ?[]u8 = null;
+
+    var cursor_pos: usize = piece_table.getTotalSize();
+
     var running = true;
     while (running) {
         const header, const body = try conn.recv();
@@ -288,8 +338,10 @@ pub fn main() !void {
                     // put some interesting colors into the new_framebuffer
                     renderGradient(new_framebuffer, window_size);
 
+                    const text = try piece_table.writeAllAlloc();
+                    defer gpa.free(text);
                     // blit some characters
-                    renderText(new_framebuffer, window_size, .{ 10, 10 }, "Hello, World!");
+                    renderText(new_framebuffer, window_size, .{ 10, 10 }, text);
 
                     try conn.send(
                         wayland.core.ShmPool.Request,
@@ -323,12 +375,6 @@ pub fn main() !void {
                             .width = std.math.maxInt(i32),
                             .height = std.math.maxInt(i32),
                         } },
-                    );
-
-                    try conn.send(
-                        wayland.core.Surface.Request,
-                        surface_id,
-                        wayland.core.Surface.Request.commit,
                     );
 
                     // commit the configuration
@@ -390,23 +436,178 @@ pub fn main() !void {
                     xkb_keymap_opt = xkbcommon.Keymap.newFromString(xkb_ctx, @ptrCast(mem), .text_v1, .no_flags) orelse return error.XKBKeymap;
                     xkb_state_opt = xkbcommon.State.new(xkb_keymap_opt.?) orelse return error.XKBStateInit;
                 },
+                .modifiers => |mods| {
+                    if (xkb_state_opt) |xkb_state| {
+                        _ = xkb_state.updateMask(
+                            mods.mods_depressed,
+                            mods.mods_latched,
+                            mods.mods_locked,
+                            0,
+                            0,
+                            0,
+                        );
+                    }
+                },
                 .key => |key| {
                     if (xkb_state_opt) |xkb_state| {
                         const keycode: xkbcommon.Keycode = key.key + 8;
                         const keysym: xkbcommon.Keysym = xkb_state.keyGetOneSym(keycode);
                         var buf: [64]u8 = undefined;
-                        const name_len = keysym.getName(&buf, buf.len);
-                        std.debug.print("{s}\n", .{buf[0..@intCast(name_len)]});
+                        // const name_len = keysym.getName(&buf, buf.len);
+                        // std.debug.print("{s}\n", .{buf[0..@intCast(name_len)]});
 
-                        const changed = if (key.state == .pressed)
-                            xkb_state.updateKey(keycode, .down)
-                        else
-                            xkb_state.updateKey(keycode, .up);
-                        _ = changed;
+                        if (key.state == .pressed) {
+                            const sym = xkbcommon.Keysym;
+                            switch (@as(u32, @intFromEnum(keysym))) {
+                                sym.BackSpace => {
+                                    try piece_table.delete(cursor_pos - 1, 1);
+                                    cursor_pos -= 1;
+                                },
+                                sym.Delete => {
+                                    piece_table.delete(cursor_pos, 1) catch |e| switch (e) {
+                                        error.OutOfBounds => {},
+                                        else => return e,
+                                    };
+                                },
+                                sym.Left => {
+                                    cursor_pos -|= 1;
+                                },
+                                sym.Right => {
+                                    cursor_pos += 1;
+                                    cursor_pos = @min(cursor_pos, piece_table.getTotalSize());
+                                },
+                                else => if (key.state == .pressed) {
+                                    const size = xkb_state.keyGetUtf8(keycode, &buf);
+                                    try piece_table.insert(cursor_pos, buf[0..size]);
+                                    cursor_pos += size;
+                                },
+                            }
+
+                            const new_buffer_id, const new_framebuffer = try getFramebuffer(&framebuffers, &id_pool, pool_alloc, window_size);
+
+                            // put some interesting colors into the new_framebuffer
+                            renderGradient(new_framebuffer, window_size);
+
+                            const text = try piece_table.writeAllAlloc();
+                            defer gpa.free(text);
+                            // blit some characters
+                            renderText(new_framebuffer, window_size, .{ 10, 10 }, text);
+
+                            try conn.send(
+                                wayland.core.ShmPool.Request,
+                                wl_shm_pool_id,
+                                .{ .create_buffer = .{
+                                    .new_id = new_buffer_id,
+                                    .offset = @intCast(@intFromPtr(new_framebuffer.ptr) - @intFromPtr(pool_bytes.ptr)),
+                                    .width = @intCast(window_size[0]),
+                                    .height = @intCast(window_size[1]),
+                                    .stride = @as(i32, @intCast(window_size[0])) * @sizeOf([4]u8),
+                                    .format = .argb8888,
+                                } },
+                            );
+
+                            try conn.send(
+                                wayland.core.Surface.Request,
+                                surface_id,
+                                .{ .attach = .{
+                                    .buffer = new_buffer_id,
+                                    .x = 0,
+                                    .y = 0,
+                                } },
+                            );
+
+                            try conn.send(
+                                wayland.core.Surface.Request,
+                                surface_id,
+                                .{ .damage = .{
+                                    .x = 0,
+                                    .y = 0,
+                                    .width = std.math.maxInt(i32),
+                                    .height = std.math.maxInt(i32),
+                                } },
+                            );
+
+                            // commit the configuration
+                            try conn.send(
+                                wayland.core.Surface.Request,
+                                surface_id,
+                                wayland.core.Surface.Request.commit,
+                            );
+                        }
                     }
                 },
                 else => {
                     std.debug.print("<- wl_keyboard@{}\n", .{event});
+                },
+            }
+        } else if (header.object_id == zwp_text_input_v3_id) {
+            const event = try wayland.deserialize(wayland.zwp.TextInputV3.Event, header, body);
+            std.debug.print("<- zwp_text_input_v3@{} event {}\n", .{ zwp_text_input_v3_id, event });
+            switch (event) {
+                .enter => |e| {
+                    _ = e;
+
+                    // if (e.surface == surface_id) {
+                    try conn.send(
+                        wayland.zwp.TextInputV3.Request,
+                        zwp_text_input_v3_id,
+                        .enable,
+                    );
+
+                    try conn.send(
+                        wayland.zwp.TextInputV3.Request,
+                        zwp_text_input_v3_id,
+                        .{ .set_content_type = .{
+                            .hint = .multiline,
+                            .purpose = .normal,
+                        } },
+                    );
+
+                    try conn.send(
+                        wayland.zwp.TextInputV3.Request,
+                        zwp_text_input_v3_id,
+                        .commit,
+                    );
+                    // }
+                },
+                .leave => |e| {
+                    _ = e;
+
+                    // if (e.surface == surface_id) {
+                    try conn.send(
+                        wayland.zwp.TextInputV3.Request,
+                        zwp_text_input_v3_id,
+                        .disable,
+                    );
+                    // }
+                },
+                .preedit_string => {},
+                .commit_string => |commit| {
+                    edit_slice = edit_buffer[0..commit.text.len];
+                    @memcpy(edit_slice.?, commit.text);
+                },
+                .delete_surrounding_text => |offset| {
+                    delete_before = offset.before_length;
+                    delete_after = offset.after_length;
+                },
+                .done => |_| {
+                    // 1 replace existing pre-edit string with cursor
+                    // 2 delete requested surrounding text
+                    const start = cursor_pos - delete_before;
+                    const end = cursor_pos + delete_after;
+                    const length = end - start;
+                    if (length != 0) {
+                        try piece_table.delete(start, length);
+                    }
+                    // 3 insert commit string with cursor at its end
+                    if (edit_slice) |slice| {
+                        try piece_table.insert(cursor_pos, slice);
+                        cursor_pos += slice.len;
+                        edit_slice = null;
+                    }
+                    // 4 calculate surrounding text to send
+                    // 5 insert new preedit text in cursor position
+                    // 6 place cursor inside predit text
                 },
             }
         } else if (framebuffers.get(header.object_id)) |framebuffer_slice| {
@@ -438,6 +639,13 @@ fn cmsg(comptime T: type) type {
         data: T,
         _padding: [padding_size]u8 align(1) = [_]u8{0} ** padding_size,
     };
+}
+
+fn getFramebuffer(framebuffers: *std.AutoHashMap(u32, []Pixel), id_pool: *wayland.IdPool, pool_alloc: std.mem.Allocator, fb_size: [2]u32) !struct { u32, []Pixel } {
+    const new_buffer_id = id_pool.create();
+    const new_framebuffer = try pool_alloc.alloc(Pixel, fb_size[0] * fb_size[1]);
+    try framebuffers.put(new_buffer_id, new_framebuffer);
+    return .{ new_buffer_id, new_framebuffer };
 }
 
 fn renderGradient(framebuffer: []Pixel, fb_size: [2]u32) void {
@@ -472,19 +680,9 @@ fn renderText(framebuffer: []Pixel, fb_size: [2]u32, pos: [2]usize, str: []const
             const char = font8x8.font8x8_basic[which_char];
             const line = char[(y - top) % 8];
             if ((line >> @intCast((x - left) % 8)) & 0x1 != 0) {
-                pixel.* = .{
-                    0xFF,
-                    0xFF,
-                    0xFF,
-                    0xFF,
-                };
+                pixel.* = toPixel(Theme.foreground);
             } else {
-                pixel.* = .{
-                    0x00,
-                    0x00,
-                    0x00,
-                    0xFF,
-                };
+                pixel.* = toPixel(Theme.background);
             }
         }
     }

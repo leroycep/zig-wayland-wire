@@ -3,6 +3,7 @@ const testing = std.testing;
 pub const core = @import("./core.zig");
 pub const xdg = @import("./xdg.zig");
 pub const zxdg = @import("./zxdg.zig");
+pub const zwp = @import("./zwp.zig");
 pub const types = @import("./types.zig");
 
 pub fn getDisplayPath(gpa: std.mem.Allocator) ![]u8 {
@@ -82,10 +83,11 @@ pub fn readInt(buffer: []const u32, parent_pos: *usize) !i32 {
     return int;
 }
 
-pub fn readString(buffer: []const u32, parent_pos: *usize) ![:0]const u8 {
+pub fn readString(buffer: []const u32, parent_pos: *usize) !?[:0]const u8 {
     var pos = parent_pos.*;
 
     const len = try readUInt(buffer, &pos);
+    if (len == 0) return null;
     const wordlen = std.mem.alignForward(usize, len, @sizeOf(u32)) / @sizeOf(u32);
 
     if (pos + wordlen > buffer.len) return error.EndOfStream;
@@ -126,9 +128,18 @@ pub fn deserializeArguments(comptime Signature: type, buffer: []const u32) !Sign
             },
             .Pointer => |ptr| switch (ptr.size) {
                 .Slice => if (ptr.child == u8) {
-                    @field(result, field.name) = try readString(buffer, &pos);
+                    @field(result, field.name) = try readString(buffer, &pos) orelse return error.UnexpectedNullString;
                 } else {
                     @field(result, field.name) = try readArray(ptr.child, buffer, &pos);
+                },
+                else => @compileError("Unsupported type " ++ @typeName(field.type)),
+            },
+            .Optional => |opt| switch (@typeInfo(opt.child)) {
+                .Pointer => |ptr| switch (ptr.size) {
+                    .Slice => if (ptr.child == u8) {
+                        @field(result, field.name) = try readString(buffer, &pos);
+                    } else @compileError("Unsupported type " ++ @typeName(field.type)),
+                    else => @compileError("Unsupported type " ++ @typeName(field.type)),
                 },
                 else => @compileError("Unsupported type " ++ @typeName(field.type)),
             },
@@ -229,6 +240,27 @@ pub fn serializeArguments(comptime Signature: type, buffer: []u32, message: Sign
                     @memcpy(buffer_bytes[0..str.len], str);
                     @memset(buffer_bytes[str.len..][0..padding_len], 0);
                     pos += str_len_aligned / @sizeOf(u32);
+                },
+                else => @compileError("Unsupported type " ++ @typeName(field.type)),
+            },
+            .Optional => |opt| switch (@typeInfo(opt.child)) {
+                .Pointer => |ptr| switch (ptr.size) {
+                    .Slice => if (ptr.child == u8) {
+                        const str = @field(message, field.name);
+                        if (str.len >= std.math.maxInt(u32)) return error.StringTooLong;
+
+                        buffer[pos] = @intCast(str.len + 1);
+                        pos += 1;
+
+                        const str_len_aligned = std.mem.alignForward(usize, str.len + 1, @sizeOf(u32));
+                        const padding_len = str_len_aligned - str.len;
+                        if (str_len_aligned / @sizeOf(u32) >= buffer[pos..].len) return error.OutOfMemory;
+                        const buffer_bytes = std.mem.sliceAsBytes(buffer[pos..]);
+                        @memcpy(buffer_bytes[0..str.len], str);
+                        @memset(buffer_bytes[str.len..][0..padding_len], 0);
+                        pos += str_len_aligned / @sizeOf(u32);
+                    } else @compileError("Unsupported type " ++ @typeName(field.type)),
+                    else => @compileError("Unsupported type " ++ @typeName(field.type)),
                 },
                 else => @compileError("Unsupported type " ++ @typeName(field.type)),
             },
@@ -496,6 +528,7 @@ pub const Conn = struct {
                     conn.send_buffer = try conn.allocator.realloc(conn.send_buffer, conn.send_buffer.len * 2);
                     continue;
                 },
+                else => return e,
             };
 
             break msg;
