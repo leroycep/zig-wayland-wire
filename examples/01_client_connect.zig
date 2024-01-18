@@ -1,6 +1,9 @@
 const std = @import("std");
 const wayland = @import("wayland");
 const xkbcommon = @import("xkbcommon");
+const font8x8 = @cImport({
+    @cInclude("font8x8.h");
+});
 
 pub fn main() !void {
     var general_allocator = std.heap.GeneralPurposeAllocator(.{}){};
@@ -301,6 +304,32 @@ pub fn main() !void {
                                 0x00,
                                 0xFF,
                             };
+                        }
+                    }
+
+                    // blit some characters
+                    for (0..window_size[1]) |y| {
+                        const row = new_framebuffer[y * window_size[0] .. (y + 1) * window_size[0]];
+                        for (row, 0..window_size[0]) |*pixel, x| {
+                            const which_char = '!' + (x / 8) + ((y / 8) * (window_size[0] / 8));
+                            if (which_char >= 128) continue;
+                            const char = font8x8.font8x8_basic[which_char];
+                            const line = char[y % 8];
+                            if ((line >> @intCast(x % 8)) & 0x1 != 0) {
+                                pixel.* = .{
+                                    0xFF,
+                                    0xFF,
+                                    0xFF,
+                                    0xFF,
+                                };
+                            } else {
+                                pixel.* = .{
+                                    0x00,
+                                    0x00,
+                                    0x00,
+                                    0xFF,
+                                };
+                            }
                         }
                     }
 

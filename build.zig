@@ -49,5 +49,6 @@ pub fn build(b: *std.Build) void {
     client_connect_exe.root_module.addImport("xkbcommon", xkbcommon_module);
     client_connect_exe.linkLibC();
     client_connect_exe.linkSystemLibrary("xkbcommon");
+    client_connect_exe.addIncludePath(.{ .path = "deps/font8x8/" });
     b.installArtifact(client_connect_exe);
 }
