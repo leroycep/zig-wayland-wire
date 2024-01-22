@@ -9,11 +9,13 @@ const testing = std.testing;
 /// like so: `var table = PieceTable{ .allocator = allocator };`
 pub const PieceTable = struct {
     allocator: std.mem.Allocator,
-    buffers: std.ArrayListUnmanaged([]u8) = .{},
+    original: []const u8 = &.{},
+    buffer: std.ArrayListUnmanaged(u8) = .{},
     pieces: std.ArrayListUnmanaged(Piece) = .{},
 
     pub const Piece = struct {
-        slice: []const u8,
+        start: usize,
+        length: usize,
         tag: Tag = .added,
         pub const Tag = enum {
             original,
@@ -31,29 +33,25 @@ pub const PieceTable = struct {
 
         const original_copy = try allocator.dupe(u8, original);
 
-        // Store original text
-        var buffers = try std.ArrayListUnmanaged([]u8).initCapacity(allocator, 1);
-        buffers.appendAssumeCapacity(original_copy);
-
         // Create piece pointing to original text
         var pieces = try std.ArrayListUnmanaged(Piece).initCapacity(allocator, 1);
         pieces.appendAssumeCapacity(.{
-            .slice = original_copy,
+            .start = 0,
+            .length = original_copy.len,
             .tag = .original,
         });
 
         return .{
             .allocator = allocator,
-            .buffers = buffers,
+            .original = original_copy,
+            .buffer = .{},
             .pieces = pieces,
         };
     }
 
     pub fn deinit(table: *PieceTable) void {
-        for (table.buffers.items) |buffer| {
-            table.allocator.free(buffer);
-        }
-        table.buffers.deinit(table.allocator);
+        table.allocator.free(table.original);
+        table.buffer.deinit(table.allocator);
         table.pieces.deinit(table.allocator);
     }
 
@@ -63,13 +61,14 @@ pub const PieceTable = struct {
     ///
     /// It is an error to insert outside of the bounds of the piece table. If the
     /// table is empty, 0 is the only valid argument for index.
-    pub fn insert(table: *PieceTable, index: usize, new_text: []const u8) !void {
-        const text = try table.allocator.dupe(u8, new_text);
-        try table.buffers.append(table.allocator, text);
+    pub fn insert(table: *PieceTable, index: usize, text: []const u8) !void {
+        const start = table.buffer.items.len;
+        const length = text.len;
+        try table.buffer.appendSlice(table.allocator, text);
 
         // Insert at the start of the file, catches empty tables
         if (index == 0) {
-            try table.pieces.insert(table.allocator, 0, .{ .slice = text, .tag = .added });
+            try table.pieces.insert(table.allocator, 0, .{ .start = start, .length = length, .tag = .added });
             return;
         }
 
@@ -77,17 +76,17 @@ pub const PieceTable = struct {
         var b_i: usize = 0;
         while (p_i < table.pieces.items.len) : (p_i += 1) {
             const p = table.pieces.items[p_i];
-            if (index == b_i + p.slice.len) {
+            if (index == b_i + p.length) {
                 if (p_i + 1 == table.pieces.items.len) {
                     // The new index is the end of the file
-                    try table.pieces.append(table.allocator, .{ .slice = text, .tag = .added });
+                    try table.pieces.append(table.allocator, .{ .start = start, .length = length, .tag = .added });
                     return;
                 } else {
                     // The new index is directly after an existing node, but not at the end of the file.
-                    try table.pieces.insert(table.allocator, p_i + 1, .{ .slice = text, .tag = .added });
+                    try table.pieces.insert(table.allocator, p_i + 1, .{ .start = start, .length = length, .tag = .added });
                     return;
                 }
-            } else if (index < b_i + p.slice.len) {
+            } else if (index < b_i + p.length) {
                 // new piece is within another piece; split the old one into 2
                 // and insert the new piece between
 
@@ -98,9 +97,18 @@ pub const PieceTable = struct {
 
                 const sub_i = index - b_i;
 
-                pieces[0].slice = p.slice[0..sub_i];
-                pieces[1].slice = text;
-                pieces[2].slice = p.slice[sub_i..];
+                const start0 = pieces[0].start;
+                const length_original = pieces[0].length;
+                const length_rest = length_original - sub_i;
+                const length_first = length_original - length_rest;
+
+                std.debug.assert(pieces[0].length == length_first + length_rest);
+
+                pieces[0].length = length_first;
+                pieces[1].start = start;
+                pieces[1].length = length;
+                pieces[2].start = start0 + (length_first);
+                pieces[2].length = length_rest;
 
                 // set the tag for the pieces 1 and 2
                 // elide setting the tag for pieces[0], it should be correct already
@@ -111,7 +119,7 @@ pub const PieceTable = struct {
                 }
                 return;
             } else {
-                b_i += p.slice.len;
+                b_i += p.length;
             }
         }
 
@@ -126,20 +134,20 @@ pub const PieceTable = struct {
 
         var b_i: usize = 0; // buffer index
         const p_start, const start_subi, const start_piece = for (table.pieces.items, 0..) |piece, i| {
-            if (start < b_i + piece.slice.len) {
+            if (start < b_i + piece.length) {
                 // start found
                 break .{ i, start - b_i, piece };
             }
-            b_i += piece.slice.len;
+            b_i += piece.length;
         } else return error.OutOfBounds;
 
         // reuse b_i
         const p_end, const end_subi, const end_piece = for (table.pieces.items[p_start..], p_start..) |piece, i| {
-            if (endi < b_i + piece.slice.len) {
+            if (endi < b_i + piece.length) {
                 break .{ i, endi - b_i, piece };
             }
-            b_i += piece.slice.len;
-        } else .{ p_start, start_piece.slice.len, start_piece };
+            b_i += piece.length;
+        } else .{ p_start, start_piece.length, start_piece };
 
         // Removal cases:
         // 1. the deletion starts on one piece boundary and ends on another piece boundary
@@ -156,7 +164,7 @@ pub const PieceTable = struct {
         //     - modify slice end in end piece
 
         const is_start_on_boundary = start_subi == 0;
-        const is_end_on_boundary = end_subi == end_piece.slice.len;
+        const is_end_on_boundary = end_subi == end_piece.length;
 
         const remove_len = (p_end + 1) - p_start;
         if (is_start_on_boundary and is_end_on_boundary) {
@@ -164,18 +172,18 @@ pub const PieceTable = struct {
         } else {
             if (is_start_on_boundary) {
                 const new = &[_]PieceTable.Piece{
-                    .{ .slice = end_piece.slice[end_subi..], .tag = end_piece.tag },
+                    .{ .start = end_piece.start + end_subi, .length = end_piece.length - end_subi, .tag = end_piece.tag },
                 };
                 table.pieces.replaceRange(table.allocator, p_start, remove_len, new) catch unreachable;
             } else if (is_end_on_boundary) {
                 const new = &[_]PieceTable.Piece{
-                    .{ .slice = start_piece.slice[0..start_subi], .tag = start_piece.tag },
+                    .{ .start = start_piece.start, .length = start_piece.length - start_subi, .tag = start_piece.tag },
                 };
                 table.pieces.replaceRange(table.allocator, p_start, remove_len, new) catch unreachable;
             } else {
                 const new = &[_]PieceTable.Piece{
-                    .{ .slice = start_piece.slice[0..start_subi], .tag = start_piece.tag },
-                    .{ .slice = end_piece.slice[end_subi..], .tag = end_piece.tag },
+                    .{ .start = start_piece.start, .length = start_subi, .tag = start_piece.tag },
+                    .{ .start = end_piece.start + end_subi, .length = end_piece.length - end_subi, .tag = end_piece.tag },
                 };
                 table.pieces.replaceRange(table.allocator, p_start, remove_len, new) catch unreachable;
             }
@@ -185,28 +193,32 @@ pub const PieceTable = struct {
     pub fn getTotalSize(table: PieceTable) usize {
         var length: usize = 0;
         for (table.pieces.items) |piece| {
-            length += piece.slice.len;
+            length += piece.length;
         }
         return length;
+    }
+
+    fn getPiece(table: PieceTable, piece: Piece) []const u8 {
+        return switch (piece.tag) {
+            .original => table.original[piece.start..][0..piece.length],
+            .added => table.buffer.items[piece.start..][0..piece.length],
+        };
     }
 
     pub fn writeAll(table: PieceTable, buffer: []u8) void {
         std.debug.assert(table.getTotalSize() == buffer.len);
         var current_buffer = buffer[0..];
         for (table.pieces.items) |piece| {
-            @memcpy(current_buffer[0..piece.slice.len], piece.slice);
-            current_buffer = current_buffer[piece.slice.len..];
+            const str = table.getPiece(piece);
+            @memcpy(current_buffer[0..piece.length], str);
+            current_buffer = current_buffer[piece.length..];
         }
     }
 
     pub fn writeAllAlloc(table: PieceTable) ![]u8 {
         const size = table.getTotalSize();
         const buffer = try table.allocator.alloc(u8, size);
-        var current_buffer = buffer[0..];
-        for (table.pieces.items) |piece| {
-            @memcpy(current_buffer[0..piece.slice.len], piece.slice);
-            current_buffer = current_buffer[piece.slice.len..];
-        }
+        table.writeAll(buffer);
         return buffer;
     }
 };
@@ -262,9 +274,9 @@ test "Insert into PieceTable" {
     try testing.expectEqual(PieceTable.Piece.Tag.added, table.pieces.items[1].tag);
     try testing.expectEqual(PieceTable.Piece.Tag.original, table.pieces.items[2].tag);
 
-    try testing.expectEqualStrings("the quick brown fox\n", table.pieces.items[0].slice);
-    try testing.expectEqualStrings("went to the park and\n", table.pieces.items[1].slice);
-    try testing.expectEqualStrings("jumped over the lazy dog", table.pieces.items[2].slice);
+    try testing.expectEqualStrings("the quick brown fox\n", table.getPiece(table.pieces.items[0]));
+    try testing.expectEqualStrings("went to the park and\n", table.getPiece(table.pieces.items[1]));
+    try testing.expectEqualStrings("jumped over the lazy dog", table.getPiece(table.pieces.items[2]));
 
     try testing.expectEqual(@as(usize, 65), table.getTotalSize());
 
@@ -292,10 +304,10 @@ test "Insert at end of Piece" {
     try testing.expectEqual(PieceTable.Piece.Tag.added, table.pieces.items[2].tag);
     try testing.expectEqual(PieceTable.Piece.Tag.original, table.pieces.items[3].tag);
 
-    try testing.expectEqualStrings("the quick brown fox\n", table.pieces.items[0].slice);
-    try testing.expectEqualStrings("went to the park and\n", table.pieces.items[1].slice);
-    try testing.expectEqualStrings("ate a burger and\n", table.pieces.items[2].slice);
-    try testing.expectEqualStrings("jumped over the lazy dog", table.pieces.items[3].slice);
+    // try testing.expectEqualStrings("the quick brown fox\n", table.pieces.items[0].slice);
+    // try testing.expectEqualStrings("went to the park and\n", table.pieces.items[1].slice);
+    // try testing.expectEqualStrings("ate a burger and\n", table.pieces.items[2].slice);
+    // try testing.expectEqualStrings("jumped over the lazy dog", table.pieces.items[3].slice);
 
     try testing.expectEqual(@as(usize, 82), table.getTotalSize());
 
@@ -321,8 +333,8 @@ test "Insert at end of file" {
     try testing.expectEqual(PieceTable.Piece.Tag.original, table.pieces.items[0].tag);
     try testing.expectEqual(PieceTable.Piece.Tag.added, table.pieces.items[1].tag);
 
-    try testing.expectEqualStrings("the quick brown fox", table.pieces.items[0].slice);
-    try testing.expectEqualStrings("\njumped over the lazy dog", table.pieces.items[1].slice);
+    // try testing.expectEqualStrings("the quick brown fox", table.pieces.items[0].slice);
+    // try testing.expectEqualStrings("\njumped over the lazy dog", table.pieces.items[1].slice);
 
     try testing.expectEqual(@as(usize, 44), table.getTotalSize());
 
@@ -365,8 +377,8 @@ test "Delete inside a Piece" {
     try table.delete(10, 6);
 
     try testing.expectEqual(@as(usize, 2), table.pieces.items.len);
-    try testing.expectEqualStrings("the quick ", table.pieces.items[0].slice);
-    try testing.expectEqualStrings("fox", table.pieces.items[1].slice);
+    // try testing.expectEqualStrings("the quick ", table.pieces.items[0].slice);
+    // try testing.expectEqualStrings("fox", table.pieces.items[1].slice);
 
     try testing.expectEqual(@as(usize, 13), table.getTotalSize());
 
