@@ -46,9 +46,18 @@ pub fn build(b: *std.Build) void {
         .optimize = optimize,
     });
     client_connect_exe.root_module.addImport("wayland", module);
-    client_connect_exe.root_module.addImport("xkbcommon", xkbcommon_module);
-    client_connect_exe.linkLibC();
-    client_connect_exe.linkSystemLibrary("xkbcommon");
-    client_connect_exe.addIncludePath(.{ .path = "deps/font8x8/" });
     b.installArtifact(client_connect_exe);
+
+    const text_editor_exe = b.addExecutable(.{
+        .name = "02_text_editor",
+        .root_source_file = .{ .path = "examples/02_text_editor.zig" },
+        .target = target,
+        .optimize = optimize,
+    });
+    text_editor_exe.root_module.addImport("wayland", module);
+    text_editor_exe.root_module.addImport("xkbcommon", xkbcommon_module);
+    text_editor_exe.linkLibC();
+    text_editor_exe.linkSystemLibrary("xkbcommon");
+    text_editor_exe.addIncludePath(.{ .path = "deps/font8x8/" });
+    b.installArtifact(text_editor_exe);
 }
