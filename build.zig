@@ -9,15 +9,10 @@ pub fn build(b: *std.Build) void {
         .optimize = optimize,
     });
 
-    const xkbcommon_module = b.createModule(.{
-        .root_source_file = .{ .path = "deps/zig-xkbcommon/src/xkbcommon.zig" },
-    });
-    xkbcommon_module.linkLibrary(libxkbcommon.artifact("xkbcommon"));
-
     const module = b.addModule("wayland", .{
         .root_source_file = .{ .path = "src/main.zig" },
         .imports = &.{
-            .{ .name = "xkbcommon", .module = xkbcommon_module },
+            .{ .name = "xkbcommon", .module = libxkbcommon.module("xkbcommon") },
         },
     });
 

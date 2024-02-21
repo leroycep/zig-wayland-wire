@@ -16,8 +16,8 @@
     // internet connectivity.
     .dependencies = .{
         .libxkbcommon = .{
-            .url = "https://git.samsehu.perli.casa/StreetLight/libxkbcommon/archive/d6a9539e0ca8676ae2e8e379a68671c79cc4fd47.tar.gz",
-            .hash = "1220c133a5f7de0ba8c7cb59258cbdc611f51097c43b9240a092ee078e3e3ea09f45",
+            .url = "https://git.samsehu.perli.casa/StreetLight/libxkbcommon/archive/f39966344458d947a09a275d09a4a75ea2e54b50.tar.gz",
+            .hash = "12201decd45154772ad3b3f7c86b6f7483e50f89b386a5f2a6721221fde45cffbb70",
         },
     },
     .paths = .{
