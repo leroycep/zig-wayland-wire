@@ -1,5 +1,8 @@
 const std = @import("std");
 const testing = std.testing;
+
+pub const xkbcommon = @import("xkbcommon");
+
 pub const core = @import("./core.zig");
 pub const xdg = @import("./xdg.zig");
 pub const zxdg = @import("./zxdg.zig");

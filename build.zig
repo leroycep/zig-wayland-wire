@@ -4,12 +4,21 @@ pub fn build(b: *std.Build) void {
     const target = b.standardTargetOptions(.{});
     const optimize = b.standardOptimizeOption(.{});
 
+    const libxkbcommon = b.dependency("libxkbcommon", .{
+        .target = target,
+        .optimize = optimize,
+    });
+
     const xkbcommon_module = b.createModule(.{
         .root_source_file = .{ .path = "deps/zig-xkbcommon/src/xkbcommon.zig" },
     });
+    xkbcommon_module.linkLibrary(libxkbcommon.artifact("xkbcommon"));
 
     const module = b.addModule("wayland", .{
         .root_source_file = .{ .path = "src/main.zig" },
+        .imports = &.{
+            .{ .name = "xkbcommon", .module = xkbcommon_module },
+        },
     });
 
     const lib = b.addStaticLibrary(.{
@@ -48,16 +57,15 @@ pub fn build(b: *std.Build) void {
     client_connect_exe.root_module.addImport("wayland", module);
     b.installArtifact(client_connect_exe);
 
+    // Text Editor example
     const text_editor_exe = b.addExecutable(.{
-        .name = "02_text_editor",
-        .root_source_file = .{ .path = "examples/02_text_editor.zig" },
+        .name = "10_text_editor",
+        .root_source_file = .{ .path = "examples/10_text_editor.zig" },
         .target = target,
         .optimize = optimize,
     });
     text_editor_exe.root_module.addImport("wayland", module);
-    text_editor_exe.root_module.addImport("xkbcommon", xkbcommon_module);
     text_editor_exe.linkLibC();
-    text_editor_exe.linkSystemLibrary("xkbcommon");
     text_editor_exe.addIncludePath(.{ .path = "deps/font8x8/" });
     b.installArtifact(text_editor_exe);
 }

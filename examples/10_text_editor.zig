@@ -1,6 +1,6 @@
 const std = @import("std");
 const wayland = @import("wayland");
-const xkbcommon = @import("xkbcommon");
+const xkbcommon = wayland.xkbcommon;
 const font8x8 = @cImport({
     @cInclude("font8x8.h");
 });
